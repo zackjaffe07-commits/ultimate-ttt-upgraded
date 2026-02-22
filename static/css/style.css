@@ -486,3 +486,40 @@ input {
 
 /* ===== LOCAL GAME ===== */
 /* uses same classes as game page */
+
+/* ===== PASSWORD EYE TOGGLE ===== */
+.password-wrap {
+    position: relative; display: flex; align-items: center;
+}
+.password-wrap input {
+    flex: 1; padding-right: 44px;
+}
+.eye-btn {
+    position: absolute; right: 0;
+    background: none; border: none; width: 44px;
+    font-size: 1.1rem; cursor: pointer; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0.6; transition: opacity 0.2s;
+    transform: none !important; box-shadow: none !important;
+}
+.eye-btn:hover { opacity: 1; }
+
+/* ===== SUCCESS MESSAGE ===== */
+.success-msg {
+    background: #e8f5e9; color: #2e7d32;
+    padding: 12px; border-radius: 8px; margin-bottom: 16px; text-align: center;
+}
+
+/* ===== USER BAR ===== */
+.user-bar {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    justify-content: flex-end; align-items: center;
+    padding: 8px 0 12px; font-size: 0.9rem;
+}
+.user-bar a {
+    color: rgba(255,255,255,0.85); text-decoration: none;
+    background: rgba(255,255,255,0.15); padding: 4px 12px; border-radius: 20px;
+    transition: background 0.2s;
+}
+.user-bar a:hover { background: rgba(255,255,255,0.25); color: white; }
+.user-bar span { color: rgba(255,255,255,0.9); font-weight: 600; }

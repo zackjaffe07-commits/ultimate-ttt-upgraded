@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Ultimate Tic Tac Toe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+
+<!-- Reset DB confirmation modal -->
+<div id="reset-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-content" style="max-width:420px; text-align:left;">
+        <h2 style="color:#c0392b; margin-bottom:8px;">⚠️ Reset Database</h2>
+        <p style="margin-bottom:16px; opacity:0.8;">
+            This will permanently delete <strong>ALL accounts and match data</strong> and log everyone out.
+            This cannot be undone.
+        </p>
+        <form method="POST" action="{{ url_for('admin_reset_db') }}" class="auth-form">
+            <div class="password-wrap">
+                <input type="password" id="reset-pw" name="confirm_password" placeholder="Enter admin password to confirm" required>
+                <button type="button" class="eye-btn" onclick="togglePw('reset-pw', this)">👁</button>
+            </div>
+            <div style="display:flex; gap:10px; margin-top:8px;">
+                <button type="submit" class="danger small" style="flex:1;">Confirm Reset</button>
+                <button type="button" class="secondary small" style="flex:1;" onclick="document.getElementById('reset-modal').style.display='none'">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div style="max-width:900px; margin:0 auto; padding:20px;">
+
+    <div class="card" style="margin-bottom:16px; text-align:left;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <div>
+                <h2 style="margin-bottom:2px;">🛡 Admin Panel</h2>
+                <p style="opacity:0.6; font-size:0.9rem;">{{ users|length }} accounts total · {{ total_matches }} matches played</p>
+            </div>
+            <div style="display:flex; gap:8px;">
+                <a href="{{ url_for('home') }}" class="button secondary small" style="width:auto;">← Home</a>
+                <button class="danger small" style="width:auto;" onclick="document.getElementById('reset-modal').style.display='flex'">
+                    🗑 Reset Database
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="{{ 'error' if category == 'error' else 'success-msg' }}" style="margin-bottom:12px;">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="card" style="text-align:left; max-width:100%; overflow-x:auto;">
+        <h3 style="margin-bottom:16px;">All Accounts</h3>
+        <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+            <thead>
+                <tr style="border-bottom:2px solid #eee;">
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">ID</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">Username</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">Password</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">ELO</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">Wins</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">Losses</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">Draws</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">Streak</th>
+                    <th style="padding:8px 12px; text-align:left; color:#1d2671;">Role</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in users %}
+                <tr style="border-bottom:1px solid #f0f0f0; {% if row.user.username == 'admin' %}background:#fff8e1;{% endif %}">
+                    <td style="padding:10px 12px; opacity:0.5;">{{ row.user.id }}</td>
+                    <td style="padding:10px 12px; font-weight:700;">
+                        {{ row.user.username }}
+                    </td>
+                    <td style="padding:10px 12px;">
+                        <span class="pw-mask" data-pw="{{ row.plain_password }}" style="font-family:monospace; cursor:pointer;" title="Click to reveal" onclick="togglePwCell(this)">
+                            ••••••••
+                        </span>
+                    </td>
+                    <td style="padding:10px 12px; font-weight:700; color:#c33764;">{{ row.user.elo }}</td>
+                    <td style="padding:10px 12px; color:#2e7d32;">{{ row.wins }}</td>
+                    <td style="padding:10px 12px; color:#c62828;">{{ row.losses }}</td>
+                    <td style="padding:10px 12px; color:#777;">{{ row.draws }}</td>
+                    <td style="padding:10px 12px;">{{ row.user.win_streak }} <span style="opacity:0.5; font-size:0.8rem;">(best: {{ row.user.best_streak }})</span></td>
+                    <td style="padding:10px 12px;">
+                        {% if row.user.username == 'admin' %}
+                            <span style="background:#f39c12; color:white; padding:2px 8px; border-radius:6px; font-size:0.75rem; font-weight:700;">ADMIN</span>
+                        {% else %}
+                            <span style="background:#eee; color:#555; padding:2px 8px; border-radius:6px; font-size:0.75rem;">User</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="9" style="padding:20px; text-align:center; opacity:0.5;">No accounts yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</div>
+
+<script>
+function togglePw(id, btn) {
+    const inp = document.getElementById(id);
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    btn.textContent = show ? '🙈' : '👁';
+}
+function togglePwCell(el) {
+    const pw = el.dataset.pw;
+    if (el.textContent.includes('•')) {
+        el.textContent = pw;
+        el.title = 'Click to hide';
+    } else {
+        el.textContent = '••••••••';
+        el.title = 'Click to reveal';
+    }
+}
+</script>
+</body>
+</html>

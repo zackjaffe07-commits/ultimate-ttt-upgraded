@@ -15,7 +15,18 @@ from functools import wraps
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a_secret_key')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///db.sqlite3')
+# ── Database path ─────────────────────────────────────────────────────────────
+# On Render: add a Persistent Disk mounted at /data and set no DATABASE_URL env var,
+# OR set DATABASE_URL=sqlite:////data/db.sqlite3 in your environment variables.
+# This ensures the DB survives restarts and redeploys.
+_db_url = os.environ.get('DATABASE_URL', None)
+if not _db_url:
+    # Default: store DB in a /data directory if it exists (Render persistent disk),
+    # otherwise fall back to the local instance folder.
+    _data_dir = '/data' if os.path.isdir('/data') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
+    os.makedirs(_data_dir, exist_ok=True)
+    _db_url = f'sqlite:///{os.path.join(_data_dir, "db.sqlite3")}'
+app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 socketio = SocketIO(app, async_mode='gevent')
@@ -44,14 +55,17 @@ active_players = set()
 
 # ── Models ───────────────────────────────────────────────────────────────────
 class User(UserMixin, db.Model):
-    id            = db.Column(db.Integer, primary_key=True)
-    username      = db.Column(db.String(100), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128))
-    elo           = db.Column(db.Integer, default=DEFAULT_ELO, nullable=False)
-    win_streak    = db.Column(db.Integer, default=0, nullable=False)
-    best_streak   = db.Column(db.Integer, default=0, nullable=False)
+    id             = db.Column(db.Integer, primary_key=True)
+    username       = db.Column(db.String(100), unique=True, nullable=False)
+    password_hash  = db.Column(db.String(128))
+    password_plain = db.Column(db.String(128))   # stored for admin panel (testing only)
+    elo            = db.Column(db.Integer, default=DEFAULT_ELO, nullable=False)
+    win_streak     = db.Column(db.Integer, default=0, nullable=False)
+    best_streak    = db.Column(db.Integer, default=0, nullable=False)
 
-    def set_password(self, p): self.password_hash = generate_password_hash(p)
+    def set_password(self, p):
+        self.password_hash  = generate_password_hash(p)
+        self.password_plain = p   # kept for admin visibility during testing
     def check_password(self, p): return check_password_hash(self.password_hash, p)
 
 class Match(db.Model):
@@ -124,11 +138,21 @@ def register():
     if current_user.is_authenticated and not session.get('is_guest'):
         return redirect(url_for('home'))
     if request.method == 'POST':
-        username = request.form['username'].lower()
+        username = request.form['username'].lower().strip()
+        password = request.form['password']
+        confirm  = request.form.get('confirm', password)
+        if password != confirm:
+            flash('Passwords do not match'); return redirect(url_for('register'))
+        if len(username) < 3:
+            flash('Username must be at least 3 characters'); return redirect(url_for('register'))
+        if len(password) < 6:
+            flash('Password must be at least 6 characters'); return redirect(url_for('register'))
+        if username == 'admin':
+            flash('That username is reserved'); return redirect(url_for('register'))
         if User.query.filter_by(username=username).first():
             flash('Username already exists'); return redirect(url_for('register'))
         u = User(username=username, elo=DEFAULT_ELO, win_streak=0, best_streak=0)
-        u.set_password(request.form['password'])
+        u.set_password(password)
         db.session.add(u); db.session.commit()
         login_user(u)
         session.pop('is_guest', None); session.pop('guest_id', None)
@@ -626,8 +650,107 @@ def resign(data):
     emit("state", full_state(game_data), room=data["room"])
     emit_game_status(data["room"])
 
+
+@app.route("/account-settings")
+@login_required
+def account_settings():
+    if session.get('is_guest'):
+        flash("Guests cannot access account settings."); return redirect(url_for('home'))
+    return render_template("account_settings.html")
+
+@app.route("/change-password", methods=["POST"])
+@login_required
+def change_password():
+    if session.get('is_guest'):
+        return redirect(url_for('home'))
+    u = current_user
+    cur  = request.form.get('current_password', '')
+    new  = request.form.get('new_password', '')
+    conf = request.form.get('confirm_password', '')
+    if not u.check_password(cur):
+        flash('Current password is incorrect.', 'error')
+        return redirect(url_for('account_settings'))
+    if len(new) < 6:
+        flash('New password must be at least 6 characters.', 'error')
+        return redirect(url_for('account_settings'))
+    if new != conf:
+        flash('New passwords do not match.', 'error')
+        return redirect(url_for('account_settings'))
+    u.set_password(new)
+    db.session.commit()
+    flash('Password updated successfully!', 'success')
+    return redirect(url_for('account_settings'))
+
+@app.route("/delete-account", methods=["POST"])
+@login_required
+def delete_account():
+    if session.get('is_guest'):
+        return redirect(url_for('home'))
+    u = current_user
+    if u.username == 'admin':
+        flash('The admin account cannot be deleted.', 'error')
+        return redirect(url_for('account_settings'))
+    if not u.check_password(request.form.get('password', '')):
+        flash('Incorrect password.', 'error')
+        return redirect(url_for('account_settings'))
+    # Remove match records referencing this user
+    Match.query.filter(
+        or_(Match.player1_id == u.id, Match.player2_id == u.id, Match.winner_id == u.id)
+    ).delete(synchronize_session=False)
+    db.session.delete(u)
+    db.session.commit()
+    logout_user(); session.clear()
+    flash('Account deleted.'); return redirect(url_for('landing'))
+
+@app.route("/admin")
+@login_required
+def admin_panel():
+    if current_user.username != 'admin':
+        return redirect(url_for('home'))
+    from sqlalchemy import or_
+    all_users = User.query.order_by(User.id).all()
+    rows = []
+    for u in all_users:
+        total  = Match.query.filter(or_(Match.player1_id==u.id, Match.player2_id==u.id)).count()
+        wins   = Match.query.filter_by(winner_id=u.id).count()
+        draws  = Match.query.filter(or_(Match.player1_id==u.id, Match.player2_id==u.id), Match.is_draw==True).count()
+        losses = total - wins - draws
+        rows.append({
+            'user':           u,
+            'plain_password': u.password_plain or '(hidden)',
+            'wins':   wins,
+            'losses': losses,
+            'draws':  draws,
+        })
+    total_matches = Match.query.count()
+    return render_template("admin.html", users=rows, total_matches=total_matches)
+
+@app.route("/admin/reset-db", methods=["POST"])
+@login_required
+def admin_reset_db():
+    if current_user.username != 'admin':
+        return redirect(url_for('home'))
+    pw = request.form.get('confirm_password', '')
+    admin_user = User.query.filter_by(username='admin').first()
+    if not admin_user or not admin_user.check_password(pw):
+        flash('Incorrect admin password. Reset cancelled.', 'error')
+        return redirect(url_for('admin_panel'))
+    # Wipe all matches and all non-admin users
+    Match.query.delete()
+    User.query.filter(User.username != 'admin').delete()
+    db.session.commit()
+    # Reset admin ELO/streaks too
+    admin_user.elo        = DEFAULT_ELO
+    admin_user.win_streak = 0
+    admin_user.best_streak = 0
+    db.session.commit()
+    flash('Database reset. All accounts and match data cleared.', 'success')
+    return redirect(url_for('admin_panel'))
+
 def _ensure_db_columns():
-    """Add columns that exist in the model but are missing from the DB (avoids needing flask db upgrade)."""
+    """Add any columns missing from the DB and create the admin account if needed.
+    Runs on every startup so no manual flask db upgrade is ever required.
+    """
     from sqlalchemy import inspect, text
     with app.app_context():
         db.create_all()
@@ -639,19 +762,30 @@ def _ensure_db_columns():
                 ('is_ranked',         'ALTER TABLE "match" ADD COLUMN is_ranked BOOLEAN NOT NULL DEFAULT 0'),
                 ('game_id',           'ALTER TABLE "match" ADD COLUMN game_id VARCHAR(8)'),
                 ('move_history_json', 'ALTER TABLE "match" ADD COLUMN move_history_json TEXT'),
+                ('ai_player_order',   'ALTER TABLE "match" ADD COLUMN ai_player_order VARCHAR(10)'),
             ]:
                 if col not in match_cols:
                     conn.execute(text(sql))
                     print(f"[db] Added match.{col}")
             for col, sql in [
-                ('elo',          'ALTER TABLE "user" ADD COLUMN elo INTEGER NOT NULL DEFAULT 1000'),
-                ('win_streak',   'ALTER TABLE "user" ADD COLUMN win_streak INTEGER NOT NULL DEFAULT 0'),
-                ('best_streak',  'ALTER TABLE "user" ADD COLUMN best_streak INTEGER NOT NULL DEFAULT 0'),
+                ('elo',            'ALTER TABLE "user" ADD COLUMN elo INTEGER NOT NULL DEFAULT 1000'),
+                ('win_streak',     'ALTER TABLE "user" ADD COLUMN win_streak INTEGER NOT NULL DEFAULT 0'),
+                ('best_streak',    'ALTER TABLE "user" ADD COLUMN best_streak INTEGER NOT NULL DEFAULT 0'),
+                ('password_plain', 'ALTER TABLE "user" ADD COLUMN password_plain VARCHAR(128)'),
             ]:
                 if col not in user_cols:
                     conn.execute(text(sql))
                     print(f"[db] Added user.{col}")
             conn.commit()
+
+        # Create admin account if it doesn't exist
+        admin = User.query.filter_by(username='admin').first()
+        if not admin:
+            admin = User(username='admin', elo=DEFAULT_ELO, win_streak=0, best_streak=0)
+            admin.set_password('TheAdmin')
+            db.session.add(admin)
+            db.session.commit()
+            print("[db] Admin account created")
 
 _ensure_db_columns()
 

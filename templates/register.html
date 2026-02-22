@@ -15,16 +15,23 @@
 
         {% with messages = get_flashed_messages() %}
             {% if messages %}
-                <div class="error">
-                    {{ messages[0] }}
-                </div>
+                <div class="error">{{ messages[0] }}</div>
             {% endif %}
         {% endwith %}
 
-        <form method="POST" action="{{ url_for('register') }}">
-            <input type="text" name="username" placeholder="Username" required>
-            <input type="password" name="password" placeholder="Password" required>
-            <button type="submit" class="primary">Register</button>
+        <div id="client-error" class="error" style="display:none;"></div>
+
+        <form method="POST" action="{{ url_for('register') }}" class="auth-form" id="reg-form">
+            <input type="text" name="username" placeholder="Username" required autocomplete="username" minlength="3" maxlength="30">
+            <div class="password-wrap">
+                <input type="password" id="password" name="password" placeholder="Password" required autocomplete="new-password" minlength="6">
+                <button type="button" class="eye-btn" onclick="togglePw('password', this)" title="Show/hide password">👁</button>
+            </div>
+            <div class="password-wrap">
+                <input type="password" id="confirm" name="confirm" placeholder="Confirm Password" required autocomplete="new-password">
+                <button type="button" class="eye-btn" onclick="togglePw('confirm', this)" title="Show/hide password">👁</button>
+            </div>
+            <button type="submit" class="primary">Create Account</button>
         </form>
 
         <div class="divider"></div>
@@ -33,5 +40,27 @@
     </div>
 </div>
 
+<script>
+function togglePw(id, btn) {
+    const inp = document.getElementById(id);
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    btn.textContent = show ? '🙈' : '👁';
+}
+
+document.getElementById('reg-form').addEventListener('submit', function(e) {
+    const pw  = document.getElementById('password').value;
+    const cpw = document.getElementById('confirm').value;
+    const err = document.getElementById('client-error');
+    if (pw !== cpw) {
+        e.preventDefault();
+        err.textContent = 'Passwords do not match.';
+        err.style.display = 'block';
+        document.getElementById('confirm').value = '';
+    } else {
+        err.style.display = 'none';
+    }
+});
+</script>
 </body>
 </html>

@@ -22,17 +22,28 @@
         {% endwith %}
 
         <form method="POST" action="{{ url_for('login') }}" class="auth-form">
-            <input type="text" name="username" placeholder="Username" required>
-            <input type="password" name="password" placeholder="Password" required>
+            <input type="text" name="username" placeholder="Username" required autocomplete="username">
+            <div class="password-wrap">
+                <input type="password" id="password" name="password" placeholder="Password" required autocomplete="current-password">
+                <button type="button" class="eye-btn" onclick="togglePw('password', this)" title="Show/hide password">👁</button>
+            </div>
             <button type="submit" class="primary">Login</button>
         </form>
 
         <div class="divider"></div>
 
         <p>Don't have an account? <a href="{{ url_for('register') }}">Register here</a></p>
-        <p class="subtle-link"><a href="{{ url_for('landing') }}">Back to main page</a></p>
+        <p class="subtle-link"><a href="{{ url_for('landing') }}">← Back to main page</a></p>
     </div>
 </div>
 
+<script>
+function togglePw(id, btn) {
+    const inp = document.getElementById(id);
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    btn.textContent = show ? '🙈' : '👁';
+}
+</script>
 </body>
 </html>

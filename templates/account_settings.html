@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Settings - Ultimate Tic Tac Toe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+
+<div class="center" style="align-items:flex-start; padding-top:40px;">
+<div style="width:100%; max-width:480px;">
+
+    <div class="card" style="margin-bottom:16px;">
+        <h2 style="margin-bottom:4px;">⚙️ Account Settings</h2>
+        <p class="subtitle" style="margin-bottom:0;">Logged in as <strong>{{ current_user.username }}</strong></p>
+    </div>
+
+    <!-- Flash messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="{{ 'error' if category == 'error' else 'success-msg' }}" style="margin-bottom:12px;">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <!-- Change Password -->
+    <div class="card" style="margin-bottom:16px; text-align:left;">
+        <h3 style="margin-bottom:16px;">🔒 Change Password</h3>
+        <form method="POST" action="{{ url_for('change_password') }}" class="auth-form" id="pw-form">
+            <div class="password-wrap">
+                <input type="password" id="cur-pw" name="current_password" placeholder="Current Password" required>
+                <button type="button" class="eye-btn" onclick="togglePw('cur-pw', this)">👁</button>
+            </div>
+            <div class="password-wrap">
+                <input type="password" id="new-pw" name="new_password" placeholder="New Password" required minlength="6">
+                <button type="button" class="eye-btn" onclick="togglePw('new-pw', this)">👁</button>
+            </div>
+            <div class="password-wrap">
+                <input type="password" id="confirm-pw" name="confirm_password" placeholder="Confirm New Password" required>
+                <button type="button" class="eye-btn" onclick="togglePw('confirm-pw', this)">👁</button>
+            </div>
+            <div id="pw-error" class="error" style="display:none;"></div>
+            <button type="submit" class="primary small" style="width:auto; margin-top:4px;">Update Password</button>
+        </form>
+    </div>
+
+    <!-- Delete Account -->
+    <div class="card" style="text-align:left;">
+        <h3 style="margin-bottom:8px; color:#c0392b;">⚠️ Delete Account</h3>
+        <p style="font-size:0.9rem; opacity:0.7; margin-bottom:16px;">
+            This permanently deletes your account and all match history. This cannot be undone.
+        </p>
+        <button class="danger small" style="width:auto;" onclick="document.getElementById('delete-section').style.display='block'; this.style.display='none';">
+            Delete My Account
+        </button>
+        <div id="delete-section" style="display:none; margin-top:16px;">
+            <form method="POST" action="{{ url_for('delete_account') }}" class="auth-form">
+                <div class="password-wrap">
+                    <input type="password" id="del-pw" name="password" placeholder="Enter your password to confirm" required>
+                    <button type="button" class="eye-btn" onclick="togglePw('del-pw', this)">👁</button>
+                </div>
+                <button type="submit" class="danger small" style="width:auto;">Yes, permanently delete my account</button>
+            </form>
+        </div>
+    </div>
+
+    <div style="margin-top:16px; text-align:center;">
+        <a href="{{ url_for('home') }}" class="button secondary small" style="width:auto;">← Back to Home</a>
+    </div>
+
+</div>
+</div>
+
+<script>
+function togglePw(id, btn) {
+    const inp = document.getElementById(id);
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    btn.textContent = show ? '🙈' : '👁';
+}
+document.getElementById('pw-form').addEventListener('submit', function(e) {
+    const nw  = document.getElementById('new-pw').value;
+    const cnw = document.getElementById('confirm-pw').value;
+    const err = document.getElementById('pw-error');
+    if (nw !== cnw) {
+        e.preventDefault();
+        err.textContent = 'New passwords do not match.';
+        err.style.display = 'block';
+        document.getElementById('confirm-pw').value = '';
+    } else {
+        err.style.display = 'none';
+    }
+});
+</script>
+</body>
+</html>

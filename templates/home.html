@@ -13,6 +13,10 @@
     {% if not is_guest %}
         <a href="{{ url_for('profile') }}">Profile</a>
         <a href="{{ url_for('leaderboard') }}">🏆 Leaderboard</a>
+        <a href="{{ url_for('account_settings') }}">⚙️ Settings</a>
+        {% if current_user.username == 'admin' %}
+            <a href="{{ url_for('admin_panel') }}" style="color:#f39c12; font-weight:700;">🛡 Admin</a>
+        {% endif %}
     {% endif %}
     <a href="{{ url_for('logout') }}">Logout</a>
 </div>
