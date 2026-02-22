@@ -331,10 +331,16 @@ def emit_game_status(room):
         if not g.started:
             if len(game_data['player_accounts']) < 2:
                 p['text'] = "Waiting for an opponent..."; p['button_action'] = 'hidden'
-            elif sid in game_data.get('ready', set()):
-                p['text'] = "Waiting for opponent to start..."; p['button_action'] = 'waiting'
             else:
-                p['text'] = "Opponent has joined! Click start when ready."; p['button_action'] = 'start'
+                # Only the host (X) gets the Start button; joiner (O) just waits
+                player_info = game_data['players'].get(sid)
+                player_symbol = player_info['symbol'] if player_info else None
+                if is_spectator or player_symbol == 'O':
+                    p['text'] = "Waiting for host to start..."; p['button_action'] = 'waiting'
+                elif sid in game_data.get('ready', set()):
+                    p['text'] = "Waiting for opponent..."; p['button_action'] = 'waiting'
+                else:
+                    p['text'] = "Opponent has joined! Click start when ready."; p['button_action'] = 'start'
         elif g.game_winner:
             winner_sym = g.game_winner
             if winner_sym == 'D':
@@ -536,7 +542,10 @@ def ready(data):
     if not game_data or sid not in game_data["players"]: return
     game_data["ready"].add(sid)
     if game_data.get("is_ai"): game_data["ready"].add("AI")
-    if len(game_data["player_accounts"]) == 2 and len(game_data["ready"]) >= 2:
+    # For online games, only the host (X) needs to click Start. For AI games, host ready is enough (AI is also added).
+    online_ready = len(game_data["player_accounts"]) == 2 and not game_data.get("is_ai")
+    ai_ready = game_data.get("is_ai") and len(game_data["ready"]) >= 2
+    if online_ready or ai_ready:
         # Apply first_player_choice for online (non-AI) games
         fpc = game_data.get("first_player_choice", "host")
         if not game_data.get("is_ai"):
@@ -802,7 +811,7 @@ def update_settings(data):
 
     # Timer type
     t_type = data.get('timer_type', game_data.get('timer_type', 'move'))
-    if t_type in ('move', 'game'):
+    if t_type in ('move', 'game', 'none'):
         game_data['timer_type'] = t_type
 
     # Move timer
@@ -812,6 +821,8 @@ def update_settings(data):
             game_data['move_timeout'] = 0
         else:
             game_data['move_timeout'] = max(10, min(300, int(raw_timeout)))
+    elif t_type == 'none':
+        game_data['move_timeout'] = 0
 
     # Game timer
     if t_type == 'game':
@@ -904,6 +915,63 @@ def resign(data):
     record_match(game_data, winner)
     emit("state", full_state(game_data), room=data["room"])
     emit_game_status(data["room"])
+
+
+@socketio.on("takeback_request")
+@socket_auth
+def takeback_request(data):
+    """Player requests to take back their last move (casual only)."""
+    room = data.get("room")
+    game_data = get_active_games().get(room)
+    if not game_data: return
+    g = game_data["game"]
+    # Only allow in casual (non-ranked), non-AI, in-progress games
+    if game_data.get("is_ranked") or game_data.get("is_ai"): return
+    if not g.started or g.game_winner: return
+    if len(g.move_history) == 0: return
+
+    sid = request.sid
+    player = game_data["players"].get(sid)
+    if not player: return
+
+    # The requester must have made the last move
+    last = g.move_history[-1]
+    if last["player"] != player["symbol"]: return
+
+    # Don't allow stacking takeback requests
+    if game_data.get("pending_takeback"): return
+
+    game_data["pending_takeback"] = sid
+
+    # Notify the opponent
+    my_symbol = player["symbol"]
+    opp_symbol = "O" if my_symbol == "X" else "X"
+    opp_sid = next((s for s, p in game_data["players"].items() if p["symbol"] == opp_symbol), None)
+    if opp_sid:
+        emit("takeback_requested", {"requester": player["username"]}, to=opp_sid)
+
+
+@socketio.on("takeback_response")
+@socket_auth
+def takeback_response(data):
+    """Opponent responds to a takeback request."""
+    room = data.get("room")
+    accepted = data.get("accepted", False)
+    game_data = get_active_games().get(room)
+    if not game_data: return
+
+    pending_sid = game_data.pop("pending_takeback", None)
+    if not pending_sid: return
+
+    if accepted:
+        g = game_data["game"]
+        g.undo_move()
+        reset_timer(game_data)
+        emit("state", full_state(game_data), room=room)
+        emit_game_status(room)
+    else:
+        # Notify requester that takeback was declined
+        emit("takeback_declined", {}, to=pending_sid)
 
 
 @app.route("/account-settings")

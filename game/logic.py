@@ -82,6 +82,33 @@ class UltimateTicTacToe:
     def resign(self, loser):
         self.game_winner = "O" if loser == "X" else "X"
 
+    def undo_move(self):
+        """Undo the last move. Returns True if successful."""
+        if not self.move_history:
+            return False
+        self.move_history.pop()
+        if not self.move_history:
+            # No moves left — reset to initial state
+            self.boards = [[None]*9 for _ in range(9)]
+            self.board_winners = [None]*9
+            self.board_win_lines = [None]*9
+            self.current_player = "X"
+            self.forced_board = None
+            self.game_winner = None
+            self.game_win_line = None
+            self.last_move = None
+        else:
+            snap = self.move_history[-1]["snapshot"]
+            self.boards = [list(row) for row in snap["boards"]]
+            self.board_winners = list(snap["winners"])
+            self.board_win_lines = list(snap["boardWinLines"])
+            self.forced_board = snap["forced"]
+            self.last_move = snap["lastMove"]
+            self.current_player = snap["player"]
+            self.game_winner = snap.get("gameWinner")
+            self.game_win_line = snap.get("gameWinLine")
+        return True
+
     def state(self):
         return {
             "boards": self.boards,

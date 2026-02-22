@@ -232,8 +232,8 @@ input {
 }
 
 .mini-board.forced { box-shadow: 0 0 0 3px #ffd700, 0 0 12px rgba(255,215,0,0.4); }
-.mini-board.won-X  { background: rgba(231,76,60,0.25); }
-.mini-board.won-O  { background: rgba(52,152,219,0.25); }
+.mini-board.won-X  { background: rgba(231,76,60,0.35); border: 2px solid rgba(231,76,60,0.7); }
+.mini-board.won-O  { background: rgba(52,152,219,0.35); border: 2px solid rgba(52,152,219,0.7); }
 .mini-board.win-board { animation: boardWin 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
 
 @keyframes boardWin {
@@ -283,7 +283,8 @@ input {
 }
 
 /* Meta-win board highlight */
-.mini-board.game-win { box-shadow: 0 0 0 4px #ffd700, 0 0 20px rgba(255,215,0,0.6); }
+.mini-board.game-win.won-X { box-shadow: 0 0 0 4px #e74c3c, 0 0 20px rgba(231,76,60,0.7); }
+.mini-board.game-win.won-O { box-shadow: 0 0 0 4px #3498db, 0 0 20px rgba(52,152,219,0.7); }
 
 /* ===== UTILITY ===== */
 @keyframes fadeIn      { from { opacity: 0; } to { opacity: 1; } }
@@ -525,8 +526,8 @@ input {
 .user-bar span { color: rgba(255,255,255,0.9); font-weight: 600; }
 
 /* ===== MINI-BOARD WIN OVERLAY (more visible) ===== */
-.mini-board.won-X { background: rgba(231, 76, 60, 0.20) !important; }
-.mini-board.won-O { background: rgba(52, 152, 219, 0.20) !important; }
+.mini-board.won-X { background: rgba(231, 76, 60, 0.35) !important; border: 2px solid rgba(231,76,60,0.7) !important; }
+.mini-board.won-O { background: rgba(52, 152, 219, 0.35) !important; border: 2px solid rgba(52,152,219,0.7) !important; }
 .mini-board.won-X .overlay {
     color: #e74c3c; font-size: 3rem; font-weight: 900;
     text-shadow: 0 2px 8px rgba(231,76,60,0.5);
@@ -535,7 +536,8 @@ input {
     color: #2980b9; font-size: 3rem; font-weight: 900;
     text-shadow: 0 2px 8px rgba(52,152,219,0.5);
 }
-.mini-board.game-win { box-shadow: 0 0 0 4px #f39c12, 0 0 24px rgba(243,156,18,0.5); }
+.mini-board.game-win.won-X { box-shadow: 0 0 0 4px #e74c3c, 0 0 24px rgba(231,76,60,0.7) !important; }
+.mini-board.game-win.won-O { box-shadow: 0 0 0 4px #3498db, 0 0 24px rgba(52,152,219,0.7) !important; }
 
 /* ===== PLAYER STAT BADGES (streak/elo) ===== */
 .player-stat {
@@ -615,3 +617,15 @@ input {
     background: rgba(255,255,255,0.1);
     border-radius: 12px;
 }
+
+/* ===== TAKEBACK REQUEST CARD ===== */
+#takeback-request-card {
+    margin-top: 8px;
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-align: center;
+}
+#takeback-request-card p {
+    margin: 0 0 8px; font-weight: 600; font-size: 0.95rem;
+}
+

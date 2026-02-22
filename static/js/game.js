@@ -447,7 +447,11 @@ socket.on("spectator", () => {
     if (spectatorHomeBtn) spectatorHomeBtn.style.display = 'inline-block';
 });
 
-socket.on("state", newState => { gameState = newState; draw(newState); });
+socket.on("state", newState => { 
+    gameState = newState; 
+    if (takebackRequestCard) takebackRequestCard.style.display = 'none';
+    draw(newState); 
+});
 
 socket.on("gameStatus", data => {
     statusEl.textContent = data.text;
@@ -710,10 +714,13 @@ function draw(state) {
 
     const newMoveCount = state.moveHistory ? state.moveHistory.length : 0;
     const justMoved    = newMoveCount > lastMoveCount;
+    // Reset takebackPending if the move was undone (count decreased) or game ended
+    if (newMoveCount < lastMoveCount || state.gameWinner) takebackPending = false;
     lastMoveCount      = newMoveCount;
 
     drawBoardGrid(state, justMoved, false);
     lastWinners = [...state.winners];
+    updateTakebackBtn();
 }
 
 function drawSnapshot(snapshot) {
@@ -812,3 +819,64 @@ function showVictoryAnimation(winner) {
     setTimeout(() => { victoryModal.style.display = "none"; }, 4000);
 }
 victoryModal.onclick = () => { victoryModal.style.display = "none"; };
+
+// ── Takeback ──────────────────────────────────────────────────────────────────
+const takebackBtn         = document.getElementById("takeback-btn");
+const takebackRequestCard = document.getElementById("takeback-request-card");
+const takebackRequestText = document.getElementById("takeback-request-text");
+const takebackAcceptBtn   = document.getElementById("takeback-accept-btn");
+const takebackDeclineBtn  = document.getElementById("takeback-decline-btn");
+
+let takebackPending = false; // we sent a request, waiting for response
+
+function updateTakebackBtn() {
+    if (!takebackBtn) return;
+    const isInGame = gameState.started && !gameState.gameWinner && !isSpectator && !gameState.isRanked && !gameState.isAI;
+    const isMyturn = gameState.player === mySymbol;
+    const hasMoves = gameState.moveHistory && gameState.moveHistory.length > 0;
+    const lastMover = hasMoves ? gameState.moveHistory[gameState.moveHistory.length - 1].player : null;
+    const iLastMoved = lastMover && lastMover !== gameState.player; // after I move it's opponent's turn
+    takebackBtn.style.display = (isInGame && hasMoves && !isMyturn && !takebackPending) ? 'inline-block' : 'none';
+}
+
+if (takebackBtn) {
+    takebackBtn.onclick = () => {
+        if (takebackPending) return;
+        takebackPending = true;
+        takebackBtn.style.display = 'none';
+        takebackBtn.textContent = '↩ Requested...';
+        socket.emit('takeback_request', { room: ROOM });
+    };
+}
+
+if (takebackAcceptBtn) {
+    takebackAcceptBtn.onclick = () => {
+        takebackRequestCard.style.display = 'none';
+        socket.emit('takeback_response', { room: ROOM, accepted: true });
+    };
+}
+
+if (takebackDeclineBtn) {
+    takebackDeclineBtn.onclick = () => {
+        takebackRequestCard.style.display = 'none';
+        socket.emit('takeback_response', { room: ROOM, accepted: false });
+    };
+}
+
+socket.on('takeback_requested', data => {
+    if (!takebackRequestCard) return;
+    takebackRequestText.textContent = `${data.requester} requests a takeback`;
+    takebackRequestCard.style.display = 'block';
+});
+
+socket.on('takeback_declined', () => {
+    takebackPending = false;
+    const msgDiv = document.createElement("div");
+    msgDiv.classList.add("chat-message");
+    msgDiv.style.color = '#e74c3c';
+    msgDiv.textContent = 'Your takeback request was declined.';
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    updateTakebackBtn();
+});
+

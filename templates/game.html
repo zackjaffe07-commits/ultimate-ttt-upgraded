@@ -138,6 +138,7 @@
                 <button id="spectate-btn" class="button secondary small" style="display:none;">👁 Spectate</button>
                 <a href="/home" id="spectator-home-btn" class="button secondary small" style="display:none;">← Home</a>
                 <button id="action" class="button primary small" style="display:none;">Start</button>
+                <button id="takeback-btn" class="button secondary small" style="display:none;" title="Request to take back your last move">↩ Takeback</button>
                 <!-- Spectator join button -->
                 <button id="join-game-btn" class="button primary small" style="display:none;">▶ Join Game</button>
                 <div id="post-game-actions" style="display:none;">
@@ -150,6 +151,13 @@
         <div class="status-card">
             <p id="status">Waiting for players…</p>
             <div id="timer-display" class="hidden"></div>
+        </div>
+        <div id="takeback-request-card" class="status-card" style="display:none; background: rgba(255,200,0,0.15); border: 1px solid rgba(255,200,0,0.5);">
+            <p id="takeback-request-text">Opponent requests a takeback</p>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+                <button id="takeback-accept-btn" class="button primary small">Accept</button>
+                <button id="takeback-decline-btn" class="button danger small">Decline</button>
+            </div>
         </div>
 
         <!-- Player info with per-player game clocks -->
