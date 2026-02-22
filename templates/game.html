@@ -188,7 +188,11 @@
         <div class="card sidebar-card move-history-card">
             <div class="move-history-header">
                 <h3>Move History</h3>
-                <span id="history-nav-hint" class="history-nav-hint" style="display:none;">← → to navigate</span>
+                <div class="history-nav-arrows" id="history-nav-arrows" style="display:none;">
+                    <button id="history-prev-btn" class="history-arrow-btn" title="Previous move">&#8592;</button>
+                    <button id="history-next-btn" class="history-arrow-btn" title="Next move / Live">&#8594;</button>
+                </div>
+                <span id="history-nav-hint" class="history-nav-hint" style="display:none;">← → keys</span>
             </div>
             <div id="history-viewing-banner" class="history-viewing-banner" style="display:none;">
                 <span id="history-viewing-label">Viewing move 1</span>

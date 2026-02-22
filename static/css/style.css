@@ -629,3 +629,40 @@ input {
     margin: 0 0 8px; font-weight: 600; font-size: 0.95rem;
 }
 
+
+/* ===== HISTORY NAV ARROWS ===== */
+.history-nav-arrows {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+.history-arrow-btn {
+    background: rgba(106,17,203,0.12);
+    border: 1px solid rgba(106,17,203,0.3);
+    border-radius: 6px;
+    color: #6a11cb;
+    font-size: 1rem;
+    font-weight: 700;
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.1s;
+    padding: 0;
+}
+.history-arrow-btn:hover {
+    background: rgba(106,17,203,0.22);
+    transform: scale(1.08);
+}
+.history-arrow-btn:active {
+    transform: scale(0.94);
+}
+.move-history-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px;
+}

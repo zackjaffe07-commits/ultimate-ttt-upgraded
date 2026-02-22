@@ -546,9 +546,29 @@ def ready(data):
     online_ready = len(game_data["player_accounts"]) == 2 and not game_data.get("is_ai")
     ai_ready = game_data.get("is_ai") and len(game_data["ready"]) >= 2
     if online_ready or ai_ready:
-        # Apply first_player_choice for online (non-AI) games
-        fpc = game_data.get("first_player_choice", "host")
-        if not game_data.get("is_ai"):
+        if game_data.get("is_ai"):
+            # Apply ai_player_order: 'first' = human is X, 'second' = human is O (AI goes first as X)
+            ai_order = game_data.get("ai_player_order", "first")
+            if ai_order == "second":
+                # Swap so human becomes O, AI becomes X
+                pa = game_data["player_accounts"]
+                human_id = next((uid for uid in pa.values() if uid != "AI"), None)
+                pa.clear(); pa["O"] = human_id; pa["X"] = "AI"
+                for s2, p in game_data["players"].items():
+                    if s2 == "AI":
+                        game_data["players"][s2] = {**p, "symbol": "X"}
+                    else:
+                        game_data["players"][s2] = {**p, "symbol": "O"}
+                        emit("assign", "O", to=s2)
+            # Announce difficulty in chat
+            diff = game_data.get("ai_difficulty", "medium")
+            diff_label = {"easy": "Easy 🟢", "medium": "Medium 🟡", "hard": "Hard 🔴"}.get(diff, diff.capitalize())
+            announce = {"username": "🤖 AI", "message": f"Difficulty: {diff_label}. Good luck!", "is_spectator": False, "symbol": None}
+            game_data["chat_history"].append(announce)
+            emit("chatMessage", announce, room=room)
+        else:
+            # Apply first_player_choice for online (non-AI) games
+            fpc = game_data.get("first_player_choice", "host")
             swap = False
             if fpc == "joiner":  swap = True
             elif fpc == "random": swap = random.choice([True, False])
@@ -562,6 +582,12 @@ def ready(data):
                         emit("assign", new_sym, to=s2)
         game_data["game"].started = True
         reset_timer(game_data)
+        # If AI goes first (human is O), make AI's opening move now
+        if game_data.get("is_ai") and game_data["game"].current_player == "X" and                 game_data["player_accounts"].get("X") == "AI":
+            diff = game_data.get("ai_difficulty", "medium")
+            ai_b, ai_c = get_ai_move(game_data["game"], diff)
+            game_data["game"].make_move(ai_b, ai_c)
+            reset_timer(game_data)
         emit("state", full_state(game_data), room=room)
     emit_game_status(room)
 
@@ -581,29 +607,37 @@ def move(data):
         if g.game_winner:
             game_data["move_deadline"] = None
             record_match(game_data, g.game_winner)
-        else:
-            reset_timer(game_data)
-            # AI turn
-            if game_data.get("is_ai") and not g.game_winner:
-                ai_prev = g.current_player
-                diff    = game_data.get("ai_difficulty", "medium")
-                ai_b, ai_c = get_ai_move(g, diff)
-                g.make_move(ai_b, ai_c)
-                _deduct_game_time(game_data, ai_prev)
-                # AI taunt
-                taunt = maybe_taunt(diff)
-                if taunt:
-                    ai_sym = next((p['symbol'] for sid, p in game_data['players'].items() if sid == 'AI'), 'O')
-                    entry  = {'username': '🤖 AI', 'message': taunt, 'is_spectator': False, 'symbol': ai_sym}
-                    game_data['chat_history'].append(entry)
-                    emit('chatMessage', entry, room=data["room"])
-                if g.game_winner:
-                    game_data["move_deadline"] = None
-                    record_match(game_data, g.game_winner)
-                else:
-                    reset_timer(game_data)
+            emit("state", full_state(game_data), room=data["room"])
+            emit_game_status(data["room"])
+            return
+        reset_timer(game_data)
+
+        # Emit player's move immediately so client sees it before AI thinks
         emit("state", full_state(game_data), room=data["room"])
         emit_game_status(data["room"])
+
+        # AI turn — runs after client has received the player's move state
+        if game_data.get("is_ai") and not g.game_winner:
+            socketio.sleep(0)  # yield to event loop so the emit above is flushed
+            ai_prev = g.current_player
+            diff    = game_data.get("ai_difficulty", "medium")
+            ai_b, ai_c = get_ai_move(g, diff)
+            g.make_move(ai_b, ai_c)
+            _deduct_game_time(game_data, ai_prev)
+            # AI taunt
+            taunt = maybe_taunt(diff)
+            if taunt:
+                ai_sym = next((p['symbol'] for sid, p in game_data['players'].items() if sid == 'AI'), 'O')
+                entry  = {'username': '🤖 AI', 'message': taunt, 'is_spectator': False, 'symbol': ai_sym}
+                game_data['chat_history'].append(entry)
+                emit('chatMessage', entry, room=data["room"])
+            if g.game_winner:
+                game_data["move_deadline"] = None
+                record_match(game_data, g.game_winner)
+            else:
+                reset_timer(game_data)
+            emit("state", full_state(game_data), room=data["room"])
+            emit_game_status(data["room"])
 
 def _deduct_game_time(game_data, player_who_moved):
     """Deduct elapsed time and add increment for game timer mode."""
@@ -671,55 +705,72 @@ def rematch(data):
     active_games = get_active_games(); room = data["room"]; sid = request.sid
     game_data    = active_games.get(room)
     if not game_data or sid not in game_data["players"] or game_data.get('rematch_declined'): return
-    game_data["rematchReady"].add(sid)
-    if game_data.get("is_ai"): game_data["rematchReady"].add("AI")
-    if len(game_data["rematchReady"]) >= 2:
-        old_pa      = game_data["player_accounts"]
-        is_ai_game  = game_data.get("is_ai", False)
-        ai_order    = game_data.get("ai_player_order", "first")
+    is_ai_game = game_data.get("is_ai", False)
 
-        if is_ai_game:
-            # For AI games: human player always stays as host.
-            # Symbol assignment follows ai_player_order setting:
-            #   'first'  → human is X (goes first), AI is O
-            #   'second' → human is O (goes second), AI is X
-            human_sym = "X" if ai_order == "first" else "O"
-            ai_sym    = "O" if human_sym == "X" else "X"
-            human_id  = next((uid for uid in old_pa.values() if uid != "AI"), None)
-            new_pa    = {human_sym: human_id, ai_sym: "AI"}
-            new_players = {}
-            for s, p in game_data["players"].items():
-                if s == "AI":
-                    new_players[s] = {**p, "symbol": ai_sym}
-                else:
-                    new_players[s] = {**p, "symbol": human_sym}
-                    emit("assign", human_sym, to=s)
-        else:
-            # Human vs human: swap sides as before
-            new_pa = {}
-            if "X" in old_pa and "O" in old_pa:
-                new_pa["X"] = old_pa["O"]
-                new_pa["O"] = old_pa["X"]
+    if is_ai_game:
+        # For AI games: immediately reset to pre-start lobby so human can adjust
+        # settings and click Start again. Human always keeps host (X) slot.
+        old_pa   = game_data["player_accounts"]
+        ai_order = game_data.get("ai_player_order", "first")
+        human_id = next((uid for uid in old_pa.values() if uid != "AI"), None)
+        # Reset symbols to default (human=X, AI=O) regardless of last game's order —
+        # ai_player_order will be re-applied when Start is clicked via ready().
+        new_pa = {"X": human_id, "O": "AI"}
+        new_players = {}
+        for s, p in game_data["players"].items():
+            if s == "AI":
+                new_players[s] = {**p, "symbol": "O"}
             else:
-                new_pa = old_pa
-            new_players = {}
-            for s, p in game_data["players"].items():
-                new_sym = "O" if p["symbol"] == "X" else "X"
-                new_players[s] = {**p, "symbol": new_sym}
-                emit("assign", new_sym, to=s)
-
+                new_players[s] = {**p, "symbol": "X"}
+                emit("assign", "X", to=s)
         new_gd = make_game_data(
             player_accounts=new_pa, players=new_players,
             spectators=game_data["spectators"],
             chat_history=game_data.get("chat_history", []),
-            is_ai=is_ai_game,
+            is_ai=True,
+            move_timeout=game_data.get("move_timeout", MOVE_TIMEOUT),
+            timer_type=game_data.get("timer_type", "move"),
+            game_time_each=game_data.get("game_time_each", 300),
+            game_increment=game_data.get("game_increment", 0),
+            is_ranked=False,
+            ai_difficulty=game_data.get("ai_difficulty", "medium"),
+            ai_player_order=ai_order,
+            first_player_choice=game_data.get("first_player_choice", "host"),
+            creator_uid=game_data.get("creator_uid"),
+        )
+        active_games[room] = new_gd
+        emit("rematchAgreed", room=room)
+        emit("state", full_state(new_gd), room=room)
+        emit_game_status(room)
+        return
+
+    # Human vs human rematch
+    game_data["rematchReady"].add(sid)
+    if len(game_data["rematchReady"]) >= 2:
+        old_pa = game_data["player_accounts"]
+        new_pa = {}
+        if "X" in old_pa and "O" in old_pa:
+            new_pa["X"] = old_pa["O"]
+            new_pa["O"] = old_pa["X"]
+        else:
+            new_pa = old_pa
+        new_players = {}
+        for s, p in game_data["players"].items():
+            new_sym = "O" if p["symbol"] == "X" else "X"
+            new_players[s] = {**p, "symbol": new_sym}
+            emit("assign", new_sym, to=s)
+        new_gd = make_game_data(
+            player_accounts=new_pa, players=new_players,
+            spectators=game_data["spectators"],
+            chat_history=game_data.get("chat_history", []),
+            is_ai=False,
             move_timeout=game_data.get("move_timeout", MOVE_TIMEOUT),
             timer_type=game_data.get("timer_type", "move"),
             game_time_each=game_data.get("game_time_each", 300),
             game_increment=game_data.get("game_increment", 0),
             is_ranked=game_data.get("is_ranked", False),
             ai_difficulty=game_data.get("ai_difficulty", "medium"),
-            ai_player_order=ai_order,
+            ai_player_order=game_data.get("ai_player_order", "first"),
             first_player_choice=game_data.get("first_player_choice", "host"),
             creator_uid=game_data.get("creator_uid"),
         )
@@ -807,7 +858,10 @@ def update_settings(data):
     if not game_data or game_data['game'].started: return
     sid    = request.sid
     player = game_data['players'].get(sid)
-    if not player or player['symbol'] != 'X': return
+    # Allow host (X) or the human player in AI games to change settings
+    is_ai_game = game_data.get('is_ai', False)
+    if not player: return
+    if not is_ai_game and player['symbol'] != 'X': return
 
     # Timer type
     t_type = data.get('timer_type', game_data.get('timer_type', 'move'))

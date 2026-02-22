@@ -54,6 +54,9 @@ const historyViewingBanner = document.getElementById("history-viewing-banner");
 const historyViewingLabel  = document.getElementById("history-viewing-label");
 const historyReturnBtn     = document.getElementById("history-return-btn");
 const historyNavHint       = document.getElementById("history-nav-hint");
+const historyNavArrows     = document.getElementById("history-nav-arrows");
+const historyPrevBtn       = document.getElementById("history-prev-btn");
+const historyNextBtn       = document.getElementById("history-next-btn");
 const rulesBtn             = document.getElementById("rules-btn");
 const rulesModal           = document.getElementById("rules-modal");
 const rulesCloseBtn        = document.getElementById("rules-close-btn");
@@ -244,9 +247,11 @@ function updateMoveHistory(history) {
         moveHistoryList.innerHTML = '<li style="color:#aaa; font-size:0.85rem;">No moves yet.</li>';
         historyViewingBanner.style.display = 'none';
         historyNavHint.style.display = 'none';
+        if (historyNavArrows) historyNavArrows.style.display = 'none';
         return;
     }
     historyNavHint.style.display = 'inline';
+    if (historyNavArrows) historyNavArrows.style.display = 'flex';
     history.forEach((m, i) => {
         const li  = document.createElement('li');
         const cls = m.player === 'X' ? 'hist-x' : 'hist-o';
@@ -312,6 +317,21 @@ document.addEventListener('keydown', e => {
 });
 
 historyReturnBtn.onclick = exitHistory;
+
+if (historyPrevBtn) {
+    historyPrevBtn.onclick = () => {
+        if (fullMoveHistory.length === 0) return;
+        if (historyIndex === null) selectHistory(fullMoveHistory.length - 1);
+        else if (historyIndex > 0) selectHistory(historyIndex - 1);
+    };
+}
+if (historyNextBtn) {
+    historyNextBtn.onclick = () => {
+        if (historyIndex === null) return;
+        if (historyIndex < fullMoveHistory.length - 1) selectHistory(historyIndex + 1);
+        else exitHistory();
+    };
+}
 
 // ── Rules Modal ───────────────────────────────────────────────────────────────
 rulesBtn.onclick     = () => { rulesModal.style.display = 'flex'; };
@@ -470,12 +490,12 @@ socket.on("gameStatus", data => {
             case 'start':
                 actionBtn.textContent = 'Start'; actionBtn.disabled = false; actionBtn.className = 'button primary small';
                 leaveBtn.style.display   = !isSpectator ? 'inline-block' : 'none';
-                settingsBtn.style.display = mySymbol === 'X' && !isSpectator ? 'inline-block' : 'none';
+                settingsBtn.style.display = (mySymbol === 'X' || gameState.isAI) && !isSpectator ? 'inline-block' : 'none';
                 break;
             case 'waiting':
                 actionBtn.textContent = 'Waiting...'; actionBtn.disabled = true; actionBtn.className = 'button primary small';
                 leaveBtn.style.display   = !isSpectator ? 'inline-block' : 'none';
-                settingsBtn.style.display = mySymbol === 'X' && !isSpectator ? 'inline-block' : 'none';
+                settingsBtn.style.display = (mySymbol === 'X' || gameState.isAI) && !isSpectator ? 'inline-block' : 'none';
                 break;
             case 'resign':
                 actionBtn.textContent = 'Resign'; actionBtn.disabled = false; actionBtn.className = 'button secondary small';
@@ -486,7 +506,7 @@ socket.on("gameStatus", data => {
             case 'hidden':
                 actionBtn.style.display = 'none';
                 leaveBtn.style.display  = !isSpectator ? 'inline-block' : 'none';
-                settingsBtn.style.display = mySymbol === 'X' && !isSpectator ? 'inline-block' : 'none';
+                settingsBtn.style.display = (mySymbol === 'X' || gameState.isAI) && !isSpectator ? 'inline-block' : 'none';
                 break;
         }
     }
@@ -832,11 +852,13 @@ let takebackPending = false; // we sent a request, waiting for response
 function updateTakebackBtn() {
     if (!takebackBtn) return;
     const isInGame = gameState.started && !gameState.gameWinner && !isSpectator && !gameState.isRanked && !gameState.isAI;
-    const isMyturn = gameState.player === mySymbol;
     const hasMoves = gameState.moveHistory && gameState.moveHistory.length > 0;
     const lastMover = hasMoves ? gameState.moveHistory[gameState.moveHistory.length - 1].player : null;
-    const iLastMoved = lastMover && lastMover !== gameState.player; // after I move it's opponent's turn
-    takebackBtn.style.display = (isInGame && hasMoves && !isMyturn && !takebackPending) ? 'inline-block' : 'none';
+    // Show only if I made the last move (it's opponent's turn) and no pending request
+    const iLastMoved = lastMover === mySymbol && gameState.player !== mySymbol;
+    const shouldShow = isInGame && iLastMoved && !takebackPending;
+    takebackBtn.style.display = shouldShow ? 'inline-block' : 'none';
+    if (shouldShow) takebackBtn.textContent = '↩ Takeback'; // reset label when showing
 }
 
 if (takebackBtn) {
@@ -844,7 +866,6 @@ if (takebackBtn) {
         if (takebackPending) return;
         takebackPending = true;
         takebackBtn.style.display = 'none';
-        takebackBtn.textContent = '↩ Requested...';
         socket.emit('takeback_request', { room: ROOM });
     };
 }
@@ -871,12 +892,14 @@ socket.on('takeback_requested', data => {
 
 socket.on('takeback_declined', () => {
     takebackPending = false;
+    // Show the takeback button again if conditions still met
+    updateTakebackBtn();
+    // Notify via chat
     const msgDiv = document.createElement("div");
     msgDiv.classList.add("chat-message");
-    msgDiv.style.color = '#e74c3c';
-    msgDiv.textContent = 'Your takeback request was declined.';
+    msgDiv.style.cssText = 'color:#e74c3c; font-style:italic;';
+    msgDiv.textContent = '↩ Takeback request declined by opponent.';
     chatMessages.appendChild(msgDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
-    updateTakebackBtn();
 });
 
