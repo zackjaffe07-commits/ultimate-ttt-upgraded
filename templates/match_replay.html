@@ -29,15 +29,24 @@
             </div>
         </div>
 
+        <!-- Winner banner -->
+        {% if match.is_draw %}
+            <div class="replay-winner-banner draw">🤝 Draw — No winner</div>
+        {% elif match.winner_id == match.player1_id %}
+            <div class="replay-winner-banner win">🏆 {{ players.X }} (X) won!</div>
+        {% else %}
+            <div class="replay-winner-banner win">🏆 {{ players.O }} (O) won!</div>
+        {% endif %}
+
         <div class="player-info-panel">
-            <div class="player-info">
+            <div class="player-info {% if match.winner_id == match.player1_id %}replay-winner{% endif %}">
                 <div class="symbol X">X</div>
-                <div class="username">{{ players.X }}</div>
+                <div class="username">{{ players.X }}{% if match.winner_id == match.player1_id %} 🏆{% endif %}</div>
             </div>
             <div class="vs-separator">vs</div>
-            <div class="player-info">
+            <div class="player-info {% if match.winner_id == match.player2_id %}replay-winner{% endif %}">
                 <div class="symbol O">O</div>
-                <div class="username">{{ players.O }}</div>
+                <div class="username">{{ players.O }}{% if match.winner_id == match.player2_id %} 🏆{% endif %}</div>
             </div>
         </div>
 

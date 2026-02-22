@@ -14,7 +14,7 @@
             <h1>🏆 Leaderboard</h1>
             <a href="{{ url_for('home') }}" class="button secondary small">Home</a>
         </div>
-        <p class="subtitle" style="margin-bottom:16px;">Players with 10+ ranked games, sorted by ELO</p>
+        <p class="subtitle" style="margin-bottom:16px;">All ranked players, sorted by ELO</p>
 
         {% if leaderboard %}
         <table class="lb-table">
@@ -52,7 +52,7 @@
         {% else %}
         <div style="text-align:center; padding:40px; opacity:0.6;">
             <p style="font-size:3rem;">🏆</p>
-            <p>No players have completed 10 ranked games yet.</p>
+            <p>No ranked matches played yet.</p>
             <p>Play ranked games to appear here!</p>
         </div>
         {% endif %}

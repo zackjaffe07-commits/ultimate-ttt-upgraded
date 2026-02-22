@@ -64,11 +64,11 @@
                             <span class="casual-badge-small">Casual</span>
                         {% endif %}
                     </div>
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        {% if match.game_id %}
-                            <a href="{{ url_for('match_replay', game_id=match.game_id) }}" class="replay-link" title="Watch replay">🎬</a>
-                        {% endif %}
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                         <div class="match-timestamp">{{ match.timestamp.strftime('%b %d, %Y') }}</div>
+                        {% if match.game_id %}
+                            <a href="{{ url_for('match_replay', game_id=match.game_id) }}" class="replay-btn-pill" title="Watch replay">🎬 Replay</a>
+                        {% endif %}
                     </div>
                 </li>
             {% else %}

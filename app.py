@@ -16,16 +16,25 @@ from functools import wraps
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a_secret_key')
 # ── Database path ─────────────────────────────────────────────────────────────
-# On Render: add a Persistent Disk mounted at /data and set no DATABASE_URL env var,
-# OR set DATABASE_URL=sqlite:////data/db.sqlite3 in your environment variables.
-# This ensures the DB survives restarts and redeploys.
+# FREE PERSISTENT DATABASE ON RENDER (no paid disk needed):
+#   1. Create a free PostgreSQL DB at https://neon.tech  (or supabase.com)
+#   2. Copy the connection string  (looks like postgresql://user:pass@host/dbname)
+#   3. In Render dashboard → your service → Environment → add:
+#        DATABASE_URL = <your connection string>
+#   That's it — the DB lives externally and survives all restarts/redeploys.
+#
+# LOCAL / FALLBACK: uses SQLite in an 'instance' folder next to app.py.
 _db_url = os.environ.get('DATABASE_URL', None)
+if _db_url and _db_url.startswith('postgres://'):
+    # SQLAlchemy 1.4+ requires postgresql:// not postgres://
+    _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
 if not _db_url:
-    # Default: store DB in a /data directory if it exists (Render persistent disk),
-    # otherwise fall back to the local instance folder.
-    _data_dir = '/data' if os.path.isdir('/data') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
+    _data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance')
     os.makedirs(_data_dir, exist_ok=True)
     _db_url = f'sqlite:///{os.path.join(_data_dir, "db.sqlite3")}'
+    if os.environ.get('RENDER'):
+        print("[WARNING] No DATABASE_URL set on Render — DB will reset on every redeploy!")
+        print("[WARNING] Set DATABASE_URL to a free Neon/Supabase PostgreSQL URL to persist data.")
 app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
@@ -206,16 +215,16 @@ def leaderboard():
             or_(Match.player1_id == u.id, Match.player2_id == u.id),
             Match.is_ranked == True
         ).count()
-        if ranked_games >= 10:
-            ranked_wins = Match.query.filter(
-                Match.winner_id == u.id, Match.is_ranked == True
-            ).count()
-            lb.append({
-                'user': u,
-                'ranked_games': ranked_games,
-                'ranked_wins': ranked_wins,
-                'win_rate': round(ranked_wins / ranked_games * 100),
-            })
+        ranked_wins = Match.query.filter(
+            Match.winner_id == u.id, Match.is_ranked == True
+        ).count()
+        win_rate = round(ranked_wins / ranked_games * 100) if ranked_games > 0 else 0
+        lb.append({
+            'user': u,
+            'ranked_games': ranked_games,
+            'ranked_wins': ranked_wins,
+            'win_rate': win_rate,
+        })
     lb.sort(key=lambda x: x['user'].elo, reverse=True)
     return render_template('leaderboard.html', leaderboard=lb)
 
@@ -234,53 +243,91 @@ def get_active_games(): return guest_games if session.get('is_guest') else games
 
 def make_game_data(player_accounts=None, players=None, spectators=None,
                    chat_history=None, is_ai=False, move_timeout=None,
-                   is_ranked=False, ai_difficulty='medium', ai_player_order='first'):
+                   is_ranked=False, ai_difficulty='medium', ai_player_order='first',
+                   timer_type='move', game_time_each=300, game_increment=0,
+                   first_player_choice='host', creator_uid=None):
     return {
-        "game":            UltimateTicTacToe(),
-        "player_accounts": player_accounts or {},
-        "players":         players or {},
-        "spectators":      spectators or {},
-        "ready":           set(),
-        "rematchReady":    set(),
-        "chat_history":    chat_history or [],
-        "rematch_declined": False,
-        "move_deadline":   None,
-        "is_ai":           is_ai,
-        "move_timeout":    move_timeout if move_timeout is not None else MOVE_TIMEOUT,
-        "is_ranked":       is_ranked,
-        "ai_difficulty":   ai_difficulty,
-        "ai_player_order": ai_player_order,
+        "game":              UltimateTicTacToe(),
+        "player_accounts":   player_accounts or {},
+        "players":           players or {},
+        "spectators":        spectators or {},
+        "ready":             set(),
+        "rematchReady":      set(),
+        "chat_history":      chat_history or [],
+        "rematch_declined":  False,
+        "move_deadline":     None,
+        "move_start_time":   None,
+        "is_ai":             is_ai,
+        "move_timeout":      move_timeout if move_timeout is not None else MOVE_TIMEOUT,
+        "timer_type":        timer_type,           # 'move' | 'game'
+        "game_time_each":    game_time_each,        # seconds per player (game timer)
+        "game_increment":    game_increment,         # seconds gained per move
+        "game_time_x":       game_time_each,         # X remaining (game timer)
+        "game_time_o":       game_time_each,         # O remaining (game timer)
+        "is_ranked":         is_ranked,
+        "ai_difficulty":     ai_difficulty,
+        "ai_player_order":   ai_player_order,
+        "first_player_choice": first_player_choice, # 'host'|'joiner'|'random' (online)
+        "creator_uid":       creator_uid,
     }
 
 def full_state(game_data):
     s = game_data["game"].state()
-    s["moveDeadline"]  = game_data.get("move_deadline")
-    s["moveTimeout"]   = game_data.get("move_timeout", MOVE_TIMEOUT)
-    s["serverNow"]     = time.time()
-    s["isAI"]          = game_data.get("is_ai", False)
-    s["aiDifficulty"]  = game_data.get("ai_difficulty", "medium")
-    s["isRanked"]      = game_data.get("is_ranked", False)
-    s["aiPlayerOrder"] = game_data.get("ai_player_order", "first")
+    s["moveDeadline"]       = game_data.get("move_deadline")
+    s["moveTimeout"]        = game_data.get("move_timeout", MOVE_TIMEOUT)
+    s["serverNow"]          = time.time()
+    s["isAI"]               = game_data.get("is_ai", False)
+    s["aiDifficulty"]       = game_data.get("ai_difficulty", "medium")
+    s["isRanked"]           = game_data.get("is_ranked", False)
+    s["aiPlayerOrder"]      = game_data.get("ai_player_order", "first")
+    s["timerType"]          = game_data.get("timer_type", "move")
+    s["gameTimeX"]          = game_data.get("game_time_x", game_data.get("game_time_each", 300))
+    s["gameTimeO"]          = game_data.get("game_time_o", game_data.get("game_time_each", 300))
+    s["gameIncrement"]      = game_data.get("game_increment", 0)
+    s["firstPlayerChoice"]  = game_data.get("first_player_choice", "host")
+    # Player stats for display (streak in casual, elo in ranked)
+    stats = {}
+    for sym, uid in game_data.get("player_accounts", {}).items():
+        if uid and uid != "AI":
+            try:
+                u = User.query.get(int(uid))
+                if u:
+                    stats[sym] = {"elo": u.elo, "streak": u.win_streak}
+            except Exception:
+                pass
+        elif uid == "AI":
+            stats[sym] = {"elo": None, "streak": None}
+    s["playerStats"] = stats
     return s
 
 def reset_timer(game_data):
-    timeout = game_data.get("move_timeout", MOVE_TIMEOUT)
-    if game_data["game"].started and not game_data["game"].game_winner:
+    if not game_data["game"].started or game_data["game"].game_winner:
+        game_data["move_deadline"] = None
+        return
+    timer_type = game_data.get("timer_type", "move")
+    if timer_type == "game":
+        player = game_data["game"].current_player
+        remaining = game_data.get(f"game_time_{player.lower()}", 300)
+        game_data["move_start_time"] = time.time()
+        game_data["move_deadline"] = (time.time() + remaining) if remaining > 0 else None
+    else:
+        timeout = game_data.get("move_timeout", MOVE_TIMEOUT)
         if timeout and timeout > 0:
             game_data["move_deadline"] = time.time() + timeout
         else:
-            game_data["move_deadline"] = None  # infinity — no deadline
-    else:
-        game_data["move_deadline"] = None
+            game_data["move_deadline"] = None
 
 def emit_game_status(room):
     game_data = get_active_games().get(room)
     if not game_data: return
     base = {'players': {p['symbol']: p['username'] for p in game_data['players'].values()}}
+    open_slot = not game_data['game'].started and len(game_data.get('player_accounts', {})) < 2
     all_sids = list(game_data['players'].keys()) + list(game_data['spectators'].keys())
     for sid in all_sids:
         p = base.copy()
         g = game_data['game']
+        is_spectator = sid in game_data['spectators']
+        p['can_join'] = open_slot and is_spectator
         if not g.started:
             if len(game_data['player_accounts']) < 2:
                 p['text'] = "Waiting for an opponent..."; p['button_action'] = 'hidden'
@@ -289,7 +336,14 @@ def emit_game_status(room):
             else:
                 p['text'] = "Opponent has joined! Click start when ready."; p['button_action'] = 'start'
         elif g.game_winner:
-            p['text'] = f"{g.game_winner} wins!" if g.game_winner != "D" else "Draw!"
+            winner_sym = g.game_winner
+            if winner_sym == 'D':
+                p['text'] = "Draw!"
+            else:
+                winner_name = game_data['player_accounts'].get(winner_sym, winner_sym)
+                # Try to get username from players dict
+                wname = next((pl['username'] for pl in game_data['players'].values() if pl.get('symbol') == winner_sym), winner_sym)
+                p['text'] = f"{wname} ({winner_sym}) wins!"
             if game_data.get('rematch_declined'):
                 p['button_rematch'] = 'declined'
             elif sid in game_data.get('rematchReady', set()):
@@ -376,7 +430,8 @@ def create(data=None):
     # Guests cannot play ranked — enforce server-side regardless of what the client sends
     is_ranked    = bool(data and data.get('ranked')) and not is_ai and not session.get('is_guest')
     ai_diff      = (data.get('difficulty', 'medium') if data else 'medium')
-    active_games[room] = make_game_data(is_ai=is_ai, is_ranked=is_ranked, ai_difficulty=ai_diff)
+    active_games[room] = make_game_data(is_ai=is_ai, is_ranked=is_ranked,
+                                        ai_difficulty=ai_diff, creator_uid=_get_socket_user_id())
     emit("created", room)
 
 @socketio.on("join")
@@ -386,33 +441,89 @@ def join(data):
     room = data["room"]; sid = request.sid
     game_data = active_games.get(room)
     if not game_data: emit("invalid"); return
-    user_id   = _get_socket_user_id()
-    is_locked = user_id in game_data.get("player_accounts", {}).values()
+    user_id  = _get_socket_user_id()
+    username = _get_socket_username()
+    is_locked = user_id and user_id in game_data.get("player_accounts", {}).values()
     if not is_locked and user_id in active_players:
         emit('already_in_game', {'error': 'You are already in another game.'}); return
     join_room(room)
     players = game_data["players"]
     pa      = game_data["player_accounts"]
     if is_locked:
+        # Reconnecting player — restore their slot
         symbol  = next(s for s, uid in pa.items() if uid == user_id)
         old_sid = next((s for s, p in players.items() if p.get('user_id') == user_id), None)
-        if old_sid: del players[old_sid]
-        players[sid] = {"symbol": symbol, "user_id": user_id, "username": _get_socket_username()}
+        if old_sid and old_sid in players: del players[old_sid]
+        players[sid] = {"symbol": symbol, "user_id": user_id, "username": username}
         emit("assign", symbol)
-    elif len(pa) < 2:
-        symbol = "X" if "X" not in pa else "O"
-        pa[symbol] = user_id
-        players[sid] = {"symbol": symbol, "user_id": user_id, "username": _get_socket_username()}
+    elif "X" not in pa:
+        # First person to join gets X (the host / creator)
+        pa["X"] = user_id
+        players[sid] = {"symbol": "X", "user_id": user_id, "username": username}
         active_players.add(user_id)
-        emit("assign", symbol)
-        if game_data.get("is_ai") and symbol == "X":
+        emit("assign", "X")
+        if game_data.get("is_ai"):
             pa["O"] = "AI"
             players["AI"] = {"symbol": "O", "user_id": "AI", "username": "🤖 AI"}
     else:
-        game_data["spectators"][sid] = {"user_id": user_id, "username": _get_socket_username()}
+        # Everyone else joins as spectator; they can claim slot O via the Join button
+        game_data["spectators"][sid] = {"user_id": user_id, "username": username}
         emit("spectator")
     if game_data.get("chat_history"):
         emit('chatHistory', {'history': game_data["chat_history"]})
+    emit("state", full_state(game_data), room=room)
+    emit_game_status(room)
+    emit_spectator_list(room)
+
+@socketio.on("claim_slot")
+@socket_auth
+def claim_slot(data):
+    """Spectator requests to become player O."""
+    active_games = get_active_games()
+    room = data.get("room"); sid = request.sid
+    game_data = active_games.get(room)
+    if not game_data: return
+    if game_data['game'].started: return
+    if sid not in game_data['spectators']: return
+    user_id = _get_socket_user_id()
+    if user_id in active_players: return
+    pa = game_data['player_accounts']
+    if len(pa) >= 2: return  # room full
+    symbol = "X" if "X" not in pa else "O"
+    spec_entry = game_data['spectators'].pop(sid)
+    pa[symbol] = user_id
+    game_data['players'][sid] = {"symbol": symbol, "user_id": user_id, "username": spec_entry['username']}
+    active_players.add(user_id)
+    emit("assign", symbol)
+    emit("state", full_state(game_data), room=room)
+    emit_game_status(room)
+    emit_spectator_list(room)
+
+
+@socketio.on("drop_to_spectator")
+@socket_auth
+def drop_to_spectator(data):
+    """Player voluntarily drops back to spectator pre-game."""
+    active_games = get_active_games()
+    room = data.get("room"); sid = request.sid
+    game_data = active_games.get(room)
+    if not game_data or game_data['game'].started: return
+    if sid not in game_data['players']: return
+    player = game_data['players'].pop(sid)
+    symbol  = player.get('symbol')
+    user_id = player.get('user_id')
+    if symbol:
+        game_data['player_accounts'].pop(symbol, None)
+    active_players.discard(user_id)
+    game_data['ready'].discard(sid)
+    # Move them to spectators
+    game_data['spectators'][sid] = {"user_id": user_id, "username": player['username']}
+    emit("spectator", to=sid)
+    # Close room if no humans left in X/O slots
+    human_accounts = [uid for uid in game_data['player_accounts'].values() if uid and uid != 'AI']
+    if not human_accounts:
+        del active_games[room]
+        return
     emit("state", full_state(game_data), room=room)
     emit_game_status(room)
     emit_spectator_list(room)
@@ -426,6 +537,20 @@ def ready(data):
     game_data["ready"].add(sid)
     if game_data.get("is_ai"): game_data["ready"].add("AI")
     if len(game_data["player_accounts"]) == 2 and len(game_data["ready"]) >= 2:
+        # Apply first_player_choice for online (non-AI) games
+        fpc = game_data.get("first_player_choice", "host")
+        if not game_data.get("is_ai"):
+            swap = False
+            if fpc == "joiner":  swap = True
+            elif fpc == "random": swap = random.choice([True, False])
+            if swap:
+                pa = game_data["player_accounts"]
+                if "X" in pa and "O" in pa:
+                    pa["X"], pa["O"] = pa["O"], pa["X"]
+                    for s2, p in game_data["players"].items():
+                        new_sym = "O" if p["symbol"] == "X" else "X"
+                        game_data["players"][s2] = {**p, "symbol": new_sym}
+                        emit("assign", new_sym, to=s2)
         game_data["game"].started = True
         reset_timer(game_data)
         emit("state", full_state(game_data), room=room)
@@ -440,7 +565,10 @@ def move(data):
     if deadline and time.time() > deadline + 2:
         return
     g = game_data["game"]
+    prev_player = g.current_player
     if g.make_move(data["board"], data["cell"]):
+        # Deduct elapsed time for game timer
+        _deduct_game_time(game_data, prev_player)
         if g.game_winner:
             game_data["move_deadline"] = None
             record_match(game_data, g.game_winner)
@@ -448,9 +576,11 @@ def move(data):
             reset_timer(game_data)
             # AI turn
             if game_data.get("is_ai") and not g.game_winner:
+                ai_prev = g.current_player
                 diff    = game_data.get("ai_difficulty", "medium")
                 ai_b, ai_c = get_ai_move(g, diff)
                 g.make_move(ai_b, ai_c)
+                _deduct_game_time(game_data, ai_prev)
                 # AI taunt
                 taunt = maybe_taunt(diff)
                 if taunt:
@@ -466,6 +596,16 @@ def move(data):
         emit("state", full_state(game_data), room=data["room"])
         emit_game_status(data["room"])
 
+def _deduct_game_time(game_data, player_who_moved):
+    """Deduct elapsed time and add increment for game timer mode."""
+    if game_data.get("timer_type") != "game": return
+    elapsed   = time.time() - (game_data.get("move_start_time") or time.time())
+    increment = game_data.get("game_increment", 0)
+    key = f"game_time_{player_who_moved.lower()}"
+    remaining = game_data.get(key, game_data.get("game_time_each", 300))
+    game_data[key] = max(0, remaining - elapsed + increment)
+    game_data["move_start_time"] = time.time()
+
 @socketio.on("timeout")
 @socket_auth
 def timeout(data):
@@ -475,12 +615,44 @@ def timeout(data):
     g = game_data["game"]
     if g.game_winner or not g.started: return
     deadline = game_data.get("move_deadline")
-    if not deadline: return          # infinity mode — no timeout
+    if not deadline: return
     if time.time() >= deadline - 1:
         timed_out = g.current_player
-        g.resign(timed_out)
-        game_data["move_deadline"] = None
-        record_match(game_data, g.game_winner)
+        timer_type = game_data.get("timer_type", "move")
+        if timer_type == "game":
+            # Game timer: player whose time ran out loses
+            g.resign(timed_out)
+            game_data["move_deadline"] = None
+            record_match(game_data, g.game_winner)
+        else:
+            # Move timer: play a random move instead of forfeiting
+            valid = g.get_valid_moves()
+            if valid:
+                rb, rc = random.choice(valid)
+                prev_p = g.current_player
+                g.make_move(rb, rc)
+                _deduct_game_time(game_data, prev_p)
+                if g.game_winner:
+                    game_data["move_deadline"] = None
+                    record_match(game_data, g.game_winner)
+                else:
+                    reset_timer(game_data)
+                    # AI responds if AI game
+                    if game_data.get("is_ai") and not g.game_winner:
+                        ai_prev = g.current_player
+                        diff = game_data.get("ai_difficulty", "medium")
+                        ai_b, ai_c = get_ai_move(g, diff)
+                        g.make_move(ai_b, ai_c)
+                        _deduct_game_time(game_data, ai_prev)
+                        if g.game_winner:
+                            game_data["move_deadline"] = None
+                            record_match(game_data, g.game_winner)
+                        else:
+                            reset_timer(game_data)
+            else:
+                g.resign(timed_out)
+                game_data["move_deadline"] = None
+                record_match(game_data, g.game_winner)
         emit("state", full_state(game_data), room=room)
         emit_game_status(room)
 
@@ -533,9 +705,14 @@ def rematch(data):
             chat_history=game_data.get("chat_history", []),
             is_ai=is_ai_game,
             move_timeout=game_data.get("move_timeout", MOVE_TIMEOUT),
+            timer_type=game_data.get("timer_type", "move"),
+            game_time_each=game_data.get("game_time_each", 300),
+            game_increment=game_data.get("game_increment", 0),
             is_ranked=game_data.get("is_ranked", False),
             ai_difficulty=game_data.get("ai_difficulty", "medium"),
             ai_player_order=ai_order,
+            first_player_choice=game_data.get("first_player_choice", "host"),
+            creator_uid=game_data.get("creator_uid"),
         )
         active_games[room] = new_gd
         emit("rematchAgreed", room=room)
@@ -551,6 +728,53 @@ def leave_post_game(data):
     game_data['rematch_declined'] = True
     emit_game_status(room)
 
+
+def _handle_player_leave_pregame(room, sid, game_data, active_games):
+    """Remove a player from a pre-game room. Handles host transfer and empty-room cleanup.
+    Returns True if the room was deleted, False otherwise."""
+    if game_data['game'].started:
+        return False
+    if sid not in game_data['players']:
+        return False
+
+    player  = game_data['players'].pop(sid)
+    symbol  = player.get('symbol')
+    user_id = player.get('user_id')
+
+    if symbol:
+        game_data['player_accounts'].pop(symbol, None)
+    active_players.discard(user_id)
+    game_data['ready'].discard(sid)
+    leave_room(room)
+
+    # Count how many human players still hold X or O slots
+    human_accounts = [uid for uid in game_data['player_accounts'].values() if uid and uid != 'AI']
+    if not human_accounts:
+        del active_games[room]
+        return True
+
+    # If X left and there is still an O player → promote O to X (host transfer)
+    if symbol == 'X':
+        # Find the remaining human player (O)
+        for remaining_sid, remaining_player in list(game_data['players'].items()):
+            if remaining_player.get('user_id') == 'AI':
+                continue
+            # Re-assign them to X
+            old_sym = remaining_player['symbol']
+            game_data['players'][remaining_sid]['symbol'] = 'X'
+            game_data['player_accounts'].pop(old_sym, None)
+            game_data['player_accounts']['X'] = remaining_player['user_id']
+            # Tell their client they are now X
+            emit('assign', 'X', to=remaining_sid)
+            # Update AI entry if present
+            if game_data.get('is_ai'):
+                if 'AI' in game_data['players']:
+                    game_data['players']['AI']['symbol'] = 'O'
+                game_data['player_accounts']['O'] = 'AI'
+            break
+
+    return False
+
 @socketio.on("leave_pre_game")
 @socket_auth
 def leave_pre_game(data):
@@ -558,17 +782,12 @@ def leave_pre_game(data):
     room         = data.get("room")
     game_data    = active_games.get(room)
     if not game_data or game_data['game'].started: return
-    sid     = request.sid
-    user_id = _get_socket_user_id()
-    if sid in game_data['players']:
-        symbol = game_data['players'][sid].get('symbol')
-        del game_data['players'][sid]
-        if symbol:
-            game_data['player_accounts'].pop(symbol, None)
-        active_players.discard(user_id)
-        game_data['ready'].discard(sid)
-        leave_room(room)
+    sid = request.sid
+    deleted = _handle_player_leave_pregame(room, sid, game_data, active_games)
+    if not deleted:
+        emit("state", full_state(game_data), room=room)
         emit_game_status(room)
+        emit_spectator_list(room)
 
 @socketio.on("update_settings")
 @socket_auth
@@ -581,12 +800,30 @@ def update_settings(data):
     player = game_data['players'].get(sid)
     if not player or player['symbol'] != 'X': return
 
-    # Timer
-    raw_timeout = data.get('move_timeout')
-    if raw_timeout is None or raw_timeout == 0:
-        game_data['move_timeout'] = 0  # infinity
-    else:
-        game_data['move_timeout'] = max(10, min(300, int(raw_timeout)))
+    # Timer type
+    t_type = data.get('timer_type', game_data.get('timer_type', 'move'))
+    if t_type in ('move', 'game'):
+        game_data['timer_type'] = t_type
+
+    # Move timer
+    if t_type == 'move':
+        raw_timeout = data.get('move_timeout')
+        if raw_timeout is None or raw_timeout == 0:
+            game_data['move_timeout'] = 0
+        else:
+            game_data['move_timeout'] = max(10, min(300, int(raw_timeout)))
+
+    # Game timer
+    if t_type == 'game':
+        raw_game_time = data.get('game_time_each')
+        if raw_game_time is not None:
+            gt = max(30, min(1800, int(raw_game_time)))
+            game_data['game_time_each'] = gt
+            game_data['game_time_x']    = gt
+            game_data['game_time_o']    = gt
+        inc = data.get('game_increment')
+        if inc is not None:
+            game_data['game_increment'] = max(0, min(30, int(inc)))
 
     # AI difficulty + player order (only when AI game)
     if game_data.get('is_ai'):
@@ -597,22 +834,40 @@ def update_settings(data):
         if order in ('first', 'second'):
             game_data['ai_player_order'] = order
 
+    # Who goes first (online games)
+    fpc = data.get('first_player_choice', game_data.get('first_player_choice', 'host'))
+    if fpc in ('host', 'joiner', 'random'):
+        game_data['first_player_choice'] = fpc
+
     emit('settingsUpdated', {
-        'move_timeout':    game_data['move_timeout'],
-        'ai_difficulty':   game_data.get('ai_difficulty', 'medium'),
-        'ai_player_order': game_data.get('ai_player_order', 'first'),
+        'move_timeout':       game_data['move_timeout'],
+        'timer_type':         game_data.get('timer_type', 'move'),
+        'game_time_each':     game_data.get('game_time_each', 300),
+        'game_increment':     game_data.get('game_increment', 0),
+        'ai_difficulty':      game_data.get('ai_difficulty', 'medium'),
+        'ai_player_order':    game_data.get('ai_player_order', 'first'),
+        'first_player_choice': game_data.get('first_player_choice', 'host'),
     }, room=room)
 
 @socketio.on('disconnect')
 def disconnect():
     sid = request.sid
-    for g in [games, guest_games]:
-        for room, game_data in list(g.items()):
+    for active_games in [games, guest_games]:
+        for room, game_data in list(active_games.items()):
             if sid in game_data.get("players", {}):
-                del game_data["players"][sid]
-                if game_data['game'].game_winner:
-                    game_data['rematch_declined'] = True
-                emit_game_status(room)
+                if not game_data['game'].started:
+                    # Pre-game: use shared helper for host-transfer + cleanup
+                    deleted = _handle_player_leave_pregame(room, sid, game_data, active_games)
+                    if not deleted:
+                        emit("state", full_state(game_data), room=room)
+                        emit_game_status(room)
+                        emit_spectator_list(room)
+                else:
+                    # Mid/post-game: keep room alive, mark rematch declined if over
+                    del game_data["players"][sid]
+                    if game_data['game'].game_winner:
+                        game_data['rematch_declined'] = True
+                    emit_game_status(room)
                 return
             elif sid in game_data.get("spectators", {}):
                 del game_data["spectators"][sid]
@@ -758,24 +1013,33 @@ def _ensure_db_columns():
         match_cols = {c['name'] for c in insp.get_columns('match')}
         user_cols  = {c['name'] for c in insp.get_columns('user')}
         with db.engine.connect() as conn:
-            for col, sql in [
-                ('is_ranked',         'ALTER TABLE "match" ADD COLUMN is_ranked BOOLEAN NOT NULL DEFAULT 0'),
-                ('game_id',           'ALTER TABLE "match" ADD COLUMN game_id VARCHAR(8)'),
-                ('move_history_json', 'ALTER TABLE "match" ADD COLUMN move_history_json TEXT'),
-                ('ai_player_order',   'ALTER TABLE "match" ADD COLUMN ai_player_order VARCHAR(10)'),
-            ]:
-                if col not in match_cols:
+            # Use IF NOT EXISTS syntax where possible (works on both SQLite and Postgres)
+            is_pg = 'postgresql' in _db_url or 'postgres' in _db_url
+            def add_col(table, col, col_type, default=None):
+                if is_pg:
+                    default_clause = f" DEFAULT {default}" if default is not None else ""
+                    sql = f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS {col} {col_type}{default_clause}'
+                else:
+                    # SQLite doesn't support IF NOT EXISTS on ALTER TABLE
+                    cols = {c['name'] for c in insp.get_columns(table)}
+                    if col in cols: return
+                    default_clause = f" DEFAULT {default}" if default is not None else ""
+                    # SQLite can't do NOT NULL ADD COLUMN without a default easily — omit NOT NULL
+                    sql = f'ALTER TABLE "{table}" ADD COLUMN {col} {col_type}{default_clause}'
+                try:
                     conn.execute(text(sql))
-                    print(f"[db] Added match.{col}")
-            for col, sql in [
-                ('elo',            'ALTER TABLE "user" ADD COLUMN elo INTEGER NOT NULL DEFAULT 1000'),
-                ('win_streak',     'ALTER TABLE "user" ADD COLUMN win_streak INTEGER NOT NULL DEFAULT 0'),
-                ('best_streak',    'ALTER TABLE "user" ADD COLUMN best_streak INTEGER NOT NULL DEFAULT 0'),
-                ('password_plain', 'ALTER TABLE "user" ADD COLUMN password_plain VARCHAR(128)'),
-            ]:
-                if col not in user_cols:
-                    conn.execute(text(sql))
-                    print(f"[db] Added user.{col}")
+                    print(f"[db] Added {table}.{col}")
+                except Exception as e:
+                    if 'already exists' not in str(e).lower() and 'duplicate' not in str(e).lower():
+                        print(f"[db] Could not add {table}.{col}: {e}")
+            add_col('match', 'is_ranked',         'BOOLEAN', 0)
+            add_col('match', 'game_id',            'VARCHAR(8)')
+            add_col('match', 'move_history_json',  'TEXT')
+            add_col('match', 'ai_player_order',    'VARCHAR(10)')
+            add_col('user',  'elo',                'INTEGER', 1000)
+            add_col('user',  'win_streak',         'INTEGER', 0)
+            add_col('user',  'best_streak',        'INTEGER', 0)
+            add_col('user',  'password_plain',     'VARCHAR(128)')
             conn.commit()
 
         # Create admin account if it doesn't exist

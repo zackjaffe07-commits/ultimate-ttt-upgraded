@@ -523,3 +523,95 @@ input {
 }
 .user-bar a:hover { background: rgba(255,255,255,0.25); color: white; }
 .user-bar span { color: rgba(255,255,255,0.9); font-weight: 600; }
+
+/* ===== MINI-BOARD WIN OVERLAY (more visible) ===== */
+.mini-board.won-X { background: rgba(231, 76, 60, 0.20) !important; }
+.mini-board.won-O { background: rgba(52, 152, 219, 0.20) !important; }
+.mini-board.won-X .overlay {
+    color: #e74c3c; font-size: 3rem; font-weight: 900;
+    text-shadow: 0 2px 8px rgba(231,76,60,0.5);
+}
+.mini-board.won-O .overlay {
+    color: #2980b9; font-size: 3rem; font-weight: 900;
+    text-shadow: 0 2px 8px rgba(52,152,219,0.5);
+}
+.mini-board.game-win { box-shadow: 0 0 0 4px #f39c12, 0 0 24px rgba(243,156,18,0.5); }
+
+/* ===== PLAYER STAT BADGES (streak/elo) ===== */
+.player-stat {
+    font-size: 0.75rem; font-weight: 700;
+    padding: 2px 7px; border-radius: 10px;
+    display: inline-block; margin-top: 2px;
+}
+.streak-badge { background: rgba(230,126,34,0.15); color: #e67e22; }
+.elo-badge    { background: rgba(195,55,100,0.12); color: #c33764; }
+
+/* ===== GAME CLOCKS (game timer mode) ===== */
+.player-clock {
+    display: inline-block; font-weight: 700; font-size: 0.9rem;
+    padding: 3px 10px; border-radius: 8px;
+    background: rgba(255,255,255,0.15);
+    margin-top: 3px; transition: background 0.3s;
+    color: inherit;
+}
+.clock-urgent {
+    background: rgba(231, 76, 60, 0.5) !important;
+    animation: timerPulse 0.6s ease infinite alternate;
+}
+
+/* ===== TIMER RADIO LABELS (settings) ===== */
+#lbl-timer-move, #lbl-timer-game, #lbl-timer-none {
+    transition: border-color 0.2s, background 0.2s;
+}
+#lbl-timer-move:hover, #lbl-timer-game:hover, #lbl-timer-none:hover {
+    background: #ede9ff !important;
+}
+
+/* ===== REPLAY BUTTON PILL (match history) ===== */
+.replay-btn-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: linear-gradient(135deg, #6a11cb, #2575fc);
+    color: white; font-size: 0.78rem; font-weight: 700;
+    padding: 4px 10px; border-radius: 20px;
+    text-decoration: none; white-space: nowrap;
+    transition: opacity 0.2s, transform 0.1s;
+}
+.replay-btn-pill:hover { opacity: 0.85; transform: translateY(-1px); }
+
+/* ===== REPLAY PAGE WINNER BANNER ===== */
+.replay-winner-banner {
+    text-align: center; font-size: 1.2rem; font-weight: 800;
+    padding: 12px 20px; border-radius: 12px; margin-bottom: 12px;
+}
+.replay-winner-banner.win  { background: #e8f5e9; color: #2e7d32; }
+.replay-winner-banner.draw { background: #f5f5f5; color: #555; }
+.player-info.replay-winner .symbol { box-shadow: 0 0 0 3px #f39c12; }
+
+/* ===== JOIN GAME BUTTON (spectator) ===== */
+#join-game-btn {
+    animation: pulse-join 1.5s ease infinite;
+}
+@keyframes pulse-join {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(37,117,252,0.4); }
+    50%       { box-shadow: 0 0 0 6px rgba(37,117,252,0); }
+}
+
+/* ===== PLAYER SLOT (wraps player-info + game clock) ===== */
+.player-slot {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+}
+/* Override player-info-panel to work with slots */
+.player-info-panel {
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 10px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 12px;
+}

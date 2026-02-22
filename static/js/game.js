@@ -47,7 +47,8 @@ const settingsApplyBtn     = document.getElementById("settings-apply-btn");
 const settingsCancelBtn    = document.getElementById("settings-cancel-btn");
 const timerSetting         = document.getElementById("timer-setting");
 const timerSettingDisplay  = document.getElementById("timer-setting-display");
-const timerInfinity        = document.getElementById("timer-infinity");
+// timer-infinity checkbox removed — new modal uses radio buttons
+const timerInfinity = null;
 const aiDiffRow            = document.querySelector(".ai-difficulty-row");
 const historyViewingBanner = document.getElementById("history-viewing-banner");
 const historyViewingLabel  = document.getElementById("history-viewing-label");
@@ -57,6 +58,11 @@ const rulesBtn             = document.getElementById("rules-btn");
 const rulesModal           = document.getElementById("rules-modal");
 const rulesCloseBtn        = document.getElementById("rules-close-btn");
 const rankedBadge          = document.getElementById("ranked-badge");
+const joinGameBtn          = document.getElementById("join-game-btn");
+const spectateBtn          = document.getElementById("spectate-btn");
+const spectatorHomeBtn     = document.getElementById("spectator-home-btn");
+const clockX               = document.getElementById("clock-X");
+const clockO               = document.getElementById("clock-O");
 
 // ── Sounds ────────────────────────────────────────────────────────────────────
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -88,11 +94,31 @@ soundToggle.onclick = () => {
 };
 
 // ── Timer ─────────────────────────────────────────────────────────────────────
+function fmtTime(sec) {
+    const s = Math.max(0, Math.ceil(sec));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return m > 0 ? `${m}:${String(r).padStart(2,'0')}` : `${s}s`;
+}
+
 function startTimer(deadline, serverNow) {
     clearInterval(timerInterval);
+    const timerType = gameState.timerType || 'move';
+
+    // Hide game clocks if not in game-timer mode
+    if (timerType !== 'game') {
+        const _hx = document.getElementById('clock-X'); if (_hx) _hx.style.display = 'none';
+        const _ho = document.getElementById('clock-O'); if (_ho) _ho.style.display = 'none';
+    }
+
+    if (timerType === 'game') {
+        // Game timer: show per-player clocks
+        timerDisplay.className = 'hidden';
+        _runGameClocks(deadline, serverNow);
+        return;
+    }
     if (!deadline) {
-        // Check for infinity mode: moveTimeout === 0 means no timer
-        if (gameState.moveTimeout === 0) {
+        if (gameState.moveTimeout === 0 || timerType === 'none') {
             timerDisplay.className = 'infinity-timer';
             timerDisplay.textContent = '⏱ ∞';
         } else {
@@ -105,7 +131,7 @@ function startTimer(deadline, serverNow) {
     const clientEndTime   = Date.now() + serverRemaining * 1000;
     function tick() {
         const rem = Math.max(0, Math.ceil((clientEndTime - Date.now()) / 1000));
-        timerDisplay.textContent = `⏱ ${rem}s`;
+        timerDisplay.textContent = `⏱ ${fmtTime(rem)}`;
         if (rem <= 8) {
             timerDisplay.classList.add('urgent');
             if (rem > 0 && rem <= 5) playSound('urgent');
@@ -119,6 +145,62 @@ function startTimer(deadline, serverNow) {
     }
     tick();
     timerInterval = setInterval(tick, 1000);
+}
+
+function _runGameClocks(deadline, serverNow) {
+    // Re-query clock elements fresh — they are now siblings of player-info,
+    // so they survive innerHTML updates without being destroyed.
+    const ckX = document.getElementById('clock-X');
+    const ckO = document.getElementById('clock-O');
+    if (ckX) ckX.style.display = '';
+    if (ckO) ckO.style.display = '';
+
+    const activePlayer    = gameState.player; // whose turn it is
+    const serverRemaining = deadline ? (deadline - (serverNow || deadline)) : 0;
+    const clientEndTime   = deadline ? (Date.now() + serverRemaining * 1000) : null;
+
+    clearInterval(timerInterval);
+    function tick() {
+        // Re-query each tick so we always have live elements
+        const cX = document.getElementById('clock-X');
+        const cO = document.getElementById('clock-O');
+        const txStored = gameState.gameTimeX != null ? gameState.gameTimeX : 0;
+        const toStored = gameState.gameTimeO != null ? gameState.gameTimeO : 0;
+
+        let xRem, oRem;
+        if (activePlayer === 'X' && clientEndTime) {
+            xRem = Math.max(0, (clientEndTime - Date.now()) / 1000);
+            oRem = toStored;
+        } else if (activePlayer === 'O' && clientEndTime) {
+            oRem = Math.max(0, (clientEndTime - Date.now()) / 1000);
+            xRem = txStored;
+        } else {
+            xRem = txStored;
+            oRem = toStored;
+        }
+
+        if (cX) {
+            const urgent = activePlayer === 'X' && xRem <= 10;
+            cX.style.display = '';
+            cX.textContent   = `⏱ ${fmtTime(xRem)}`;
+            cX.className     = 'player-clock' + (urgent ? ' clock-urgent' : '');
+        }
+        if (cO) {
+            const urgent = activePlayer === 'O' && oRem <= 10;
+            cO.style.display = '';
+            cO.textContent   = `⏱ ${fmtTime(oRem)}`;
+            cO.className     = 'player-clock' + (urgent ? ' clock-urgent' : '');
+        }
+
+        const activeRem = activePlayer === 'X' ? xRem : oRem;
+        if (activeRem <= 5 && activeRem > 0) playSound('urgent');
+        if (activeRem <= 0 && clientEndTime) {
+            clearInterval(timerInterval);
+            socket.emit('timeout', { room: ROOM });
+        }
+    }
+    tick();
+    timerInterval = setInterval(tick, 200);
 }
 
 // ── Confetti ──────────────────────────────────────────────────────────────────
@@ -238,64 +320,142 @@ rulesModal.onclick   = e => { if (e.target === rulesModal) rulesModal.style.disp
 
 // ── Settings Modal ────────────────────────────────────────────────────────────
 settingsBtn.onclick     = () => { settingsModal.style.display = 'flex'; };
+
+// Timer type radio wiring
+document.querySelectorAll('input[name="timer-type"]').forEach(radio => {
+    radio.addEventListener('change', () => _updateTimerRows(radio.value));
+});
+// Game time slider display
+const _gtSlider = document.getElementById('game-time-setting');
+const _gtDisp   = document.getElementById('game-time-display');
+if (_gtSlider && _gtDisp) {
+    _gtSlider.oninput = () => {
+        const v = parseInt(_gtSlider.value), m = Math.floor(v/60), s = v%60;
+        _gtDisp.textContent = m > 0 ? `${m}:${String(s).padStart(2,'0')}` : `${v}s`;
+    };
+}
+const _incSlider = document.getElementById('increment-setting');
+const _incDisp   = document.getElementById('increment-display');
+if (_incSlider && _incDisp) {
+    _incSlider.oninput = () => { _incDisp.textContent = _incSlider.value + 's'; };
+}
 settingsCancelBtn.onclick = () => { settingsModal.style.display = 'none'; };
 settingsModal.onclick   = e => { if (e.target === settingsModal) settingsModal.style.display = 'none'; };
 
-timerInfinity.onchange = () => {
-    timerSetting.disabled = timerInfinity.checked;
-    timerSettingDisplay.textContent = timerInfinity.checked ? '∞' : timerSetting.value + 's';
-};
-timerSetting.oninput = () => {
-    if (!timerInfinity.checked) timerSettingDisplay.textContent = timerSetting.value + 's';
-};
+// Move timer slider display (no infinity checkbox anymore — use 'no timer' radio)
+if (timerSetting && timerSettingDisplay) {
+    timerSetting.oninput = () => {
+        timerSettingDisplay.textContent = timerSetting.value + 's';
+    };
+}
 
 settingsApplyBtn.onclick = () => {
-    const timeout   = timerInfinity.checked ? 0 : parseInt(timerSetting.value);
-    const diffEl    = document.querySelector('input[name="ai-diff"]:checked');
-    const diff      = diffEl ? diffEl.value : 'medium';
-    const orderEl   = document.querySelector('input[name="ai-order"]:checked');
-    const order     = orderEl ? orderEl.value : 'first';
-    socket.emit('update_settings', { room: ROOM, move_timeout: timeout, ai_difficulty: diff, ai_player_order: order });
+    const timerTypeEl = document.querySelector('input[name="timer-type"]:checked');
+    const timerType   = timerTypeEl ? timerTypeEl.value : 'move';
+    const timeout     = timerType === 'move' ? parseInt(document.getElementById('timer-setting').value) : 0;
+    const gameTime    = parseInt(document.getElementById('game-time-setting').value);
+    const increment   = parseInt(document.getElementById('increment-setting').value);
+    const diffEl      = document.querySelector('input[name="ai-diff"]:checked');
+    const diff        = diffEl ? diffEl.value : 'medium';
+    const orderEl     = document.querySelector('input[name="ai-order"]:checked');
+    const order       = orderEl ? orderEl.value : 'first';
+    const fpEl        = document.querySelector('input[name="first-player"]:checked');
+    const fp          = fpEl ? fpEl.value : 'host';
+    socket.emit('update_settings', {
+        room: ROOM,
+        timer_type: timerType,
+        move_timeout: timerType === 'move' ? timeout : 0,
+        game_time_each: gameTime,
+        game_increment: increment,
+        ai_difficulty: diff,
+        ai_player_order: order,
+        first_player_choice: fp,
+    });
     settingsModal.style.display = 'none';
 };
 
 socket.on('settingsUpdated', data => {
-    if (data.move_timeout === 0) {
-        timerInfinity.checked = true;
-        timerSetting.disabled = true;
-        timerSettingDisplay.textContent = '∞';
-    } else {
-        timerInfinity.checked = false;
-        timerSetting.disabled = false;
-        timerSetting.value = data.move_timeout;
-        timerSettingDisplay.textContent = data.move_timeout + 's';
+    // Timer type
+    const ttEl = document.querySelector(`input[name="timer-type"][value="${data.timer_type || 'move'}"]`);
+    if (ttEl) { ttEl.checked = true; _updateTimerRows(data.timer_type || 'move'); }
+    // Move timer
+    const mt = document.getElementById('timer-setting');
+    const mtd = document.getElementById('timer-setting-display');
+    if (mt && data.move_timeout > 0) { mt.value = data.move_timeout; mtd.textContent = data.move_timeout + 's'; }
+    // Game timer
+    const gt = document.getElementById('game-time-setting');
+    const gtd = document.getElementById('game-time-display');
+    if (gt && data.game_time_each) {
+        gt.value = data.game_time_each;
+        const m = Math.floor(data.game_time_each/60), s = data.game_time_each%60;
+        gtd.textContent = m > 0 ? `${m}:${String(s).padStart(2,'0')}` : `${s}s`;
     }
+    const inc = document.getElementById('increment-setting');
+    const incd = document.getElementById('increment-display');
+    if (inc && data.game_increment !== undefined) { inc.value = data.game_increment; incd.textContent = data.game_increment + 's'; }
+    // AI settings
     const diffEl = document.querySelector(`input[name="ai-diff"][value="${data.ai_difficulty}"]`);
     if (diffEl) diffEl.checked = true;
     const orderEl = document.querySelector(`input[name="ai-order"][value="${data.ai_player_order || 'first'}"]`);
     if (orderEl) orderEl.checked = true;
+    // First player
+    const fpEl = document.querySelector(`input[name="first-player"][value="${data.first_player_choice || 'host'}"]`);
+    if (fpEl) fpEl.checked = true;
 });
+
+function _updateTimerRows(type) {
+    const moveRow = document.getElementById('move-timer-row');
+    const gameRow = document.getElementById('game-timer-row');
+    if (moveRow) moveRow.style.display = type === 'move' ? '' : 'none';
+    if (gameRow) gameRow.style.display = type === 'game' ? '' : 'none';
+    // Visual selection on radio labels
+    ['move','game','none'].forEach(t => {
+        const lbl = document.getElementById(`lbl-timer-${t}`);
+        if (lbl) lbl.style.borderColor = (t === type) ? '#6a11cb' : 'transparent';
+    });
+}
 
 // ── Socket Listeners ──────────────────────────────────────────────────────────
 socket.on('connect', () => { socket.emit("join", { room: ROOM }); });
 
 socket.on("assign", s => {
-    mySymbol = s;
+    mySymbol    = s;
+    isSpectator = false;
     playerText.textContent = `You are ${s}`;
+    // Immediately show correct pre-game buttons (don't wait for gameStatus)
+    if (joinGameBtn)      joinGameBtn.style.display      = 'none';
+    if (spectatorHomeBtn) spectatorHomeBtn.style.display = 'none';
+    if (spectateBtn)      spectateBtn.style.display      = 'inline-block';
+    if (leaveBtn)         leaveBtn.style.display         = 'inline-block';
+    // Show Start button if game hasn't started yet — gameStatus will refine this
+    if (actionBtn && !gameState.started) {
+        actionBtn.style.display  = 'inline-block';
+        actionBtn.textContent    = 'Start';
+        actionBtn.disabled       = false;
+        actionBtn.className      = 'button primary small';
+    }
 });
 
 socket.on("spectator", () => {
     isSpectator = true;
-    playerText.textContent = "You are a spectator";
-    if (actionBtn)   actionBtn.style.display   = "none";
-    if (leaveBtn)    leaveBtn.style.display    = "none";
-    if (settingsBtn) settingsBtn.style.display = "none";
+    mySymbol    = null;
+    playerText.textContent = "You are spectating";
+    if (actionBtn)        actionBtn.style.display        = "none";
+    if (leaveBtn)         leaveBtn.style.display         = "none";
+    if (spectateBtn)      spectateBtn.style.display      = "none";
+    if (settingsBtn)      settingsBtn.style.display      = "none";
+    if (spectatorHomeBtn) spectatorHomeBtn.style.display = 'inline-block';
 });
 
 socket.on("state", newState => { gameState = newState; draw(newState); });
 
 socket.on("gameStatus", data => {
     statusEl.textContent = data.text;
+    if (joinGameBtn) joinGameBtn.style.display = (data.can_join && isSpectator) ? 'inline-block' : 'none';
+    // Spectate button visible for non-spectator players pre-game only
+    if (spectateBtn && !gameState.started) {
+        spectateBtn.style.display = (!isSpectator && data.button_action && data.button_action !== 'resign') ? 'inline-block' : 'none';
+    }
     updatePlayerInfo(data.players);
     if (data.button_action) {
         actionBtn.style.display = 'inline-block';
@@ -315,8 +475,9 @@ socket.on("gameStatus", data => {
                 break;
             case 'resign':
                 actionBtn.textContent = 'Resign'; actionBtn.disabled = false; actionBtn.className = 'button secondary small';
-                leaveBtn.style.display   = 'none';
+                leaveBtn.style.display    = 'none';
                 settingsBtn.style.display = 'none';
+                if (spectateBtn) spectateBtn.style.display = 'none';
                 break;
             case 'hidden':
                 actionBtn.style.display = 'none';
@@ -451,6 +612,18 @@ homeBtn.onclick = () => {
     if (gameEnded) socket.emit("leave_post_game", { room: ROOM });
     window.location.href = "/home";
 };
+if (joinGameBtn) {
+    joinGameBtn.onclick = () => {
+        socket.emit('claim_slot', { room: ROOM });
+    };
+}
+
+if (spectateBtn) {
+    spectateBtn.onclick = () => {
+        socket.emit('drop_to_spectator', { room: ROOM });
+    };
+}
+
 leaveBtn.onclick = () => {
     socket.emit('leave_pre_game', { room: ROOM });
     window.location.href = '/home';
@@ -459,15 +632,30 @@ leaveBtn.onclick = () => {
 // ── Draw ──────────────────────────────────────────────────────────────────────
 function updatePlayerInfo(players) {
     myUsername = document.body.dataset.username;
+    const isRanked = gameState.isRanked;
+    const stats    = gameState.playerStats || {};
     const renderPlayer = (div, symbol, username) => {
         const isActive = gameState.player === symbol && gameState.started && !gameState.gameWinner;
         const youTag   = (username === myUsername && !isSpectator) ? '<div class="you-tag">You</div>' : '';
+        const stat     = stats[symbol];
+        let statBadge  = '';
+        if (stat && username) {
+            if (isRanked && stat.elo != null) {
+                statBadge = `<div class="player-stat elo-badge">${stat.elo} ELO</div>`;
+            } else if (!isRanked && stat.streak != null && stat.streak > 0) {
+                statBadge = `<div class="player-stat streak-badge">🔥 ${stat.streak}</div>`;
+            }
+        }
         div.className  = `player-info${isActive ? ' active-player' : ''}`;
         div.innerHTML  = `
             <div class="symbol ${symbol}">${symbol}</div>
-            <div class="username">${username || 'Waiting...'}</div>
+            <div>
+                <div class="username">${username || 'Waiting...'}</div>
+                ${statBadge}
+            </div>
             ${youTag}
         `;
+        // Clocks are siblings (not children) of this div — no re-attach needed
     };
     renderPlayer(playerXDiv, 'X', players.X);
     renderPlayer(playerODiv, 'O', players.O);
@@ -478,16 +666,28 @@ function draw(state) {
     if (rankedBadge) rankedBadge.style.display = state.isRanked ? 'inline' : 'none';
 
     // Show AI difficulty row in settings modal for AI games
-    if (aiDiffRow) aiDiffRow.style.display = state.isAI ? 'block' : 'none';
+    if (aiDiffRow) {
+        document.querySelectorAll('.ai-difficulty-row').forEach(r => {
+            r.style.display = state.isAI ? 'block' : 'none';
+        });
+    }
+    // Show/hide first-player-row (online only)
+    const fpRow = document.getElementById('first-player-row');
+    if (fpRow) fpRow.style.display = state.isAI ? 'none' : '';
 
     // Timer
+    const ttype = state.timerType || 'move';
     if (state.started && !state.gameWinner) {
-        if (state.moveDeadline) {
+        if (ttype === 'game') {
             startTimer(state.moveDeadline, state.serverNow);
-        } else if (state.moveTimeout === 0) {
+        } else if (state.moveDeadline) {
+            startTimer(state.moveDeadline, state.serverNow);
+        } else if (state.moveTimeout === 0 || ttype === 'none') {
             clearInterval(timerInterval);
             timerDisplay.className = 'infinity-timer';
             timerDisplay.textContent = '⏱ ∞';
+            const _cxA = document.getElementById('clock-X'); if (_cxA) _cxA.style.display = 'none';
+            const _coA = document.getElementById('clock-O'); if (_coA) _coA.style.display = 'none';
         } else {
             clearInterval(timerInterval);
             timerDisplay.className = 'hidden';
@@ -495,6 +695,8 @@ function draw(state) {
     } else {
         clearInterval(timerInterval);
         if (timerDisplay) timerDisplay.className = 'hidden';
+        const _cxB = document.getElementById('clock-X'); if (_cxB) _cxB.style.display = 'none';
+        const _coB = document.getElementById('clock-O'); if (_coB) _coB.style.display = 'none';
     }
 
     if (state.moveHistory) updateMoveHistory(state.moveHistory);

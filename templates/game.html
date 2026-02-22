@@ -46,19 +46,60 @@
 <div id="settings-modal" class="modal-overlay" style="display:none;">
     <div class="modal-content settings-modal-content">
         <h2>⚙️ Room Settings</h2>
-        <p class="subtitle">Only the host (X) can change these</p>
+        <p class="subtitle">Only the host can change these</p>
 
+        <!-- Timer Type -->
         <div class="settings-row">
-            <label>Move Timer: <strong id="timer-setting-display">30s</strong></label>
-            <input type="range" id="timer-setting" min="10" max="300" step="5" value="30">
-            <div class="settings-hints"><span>10s</span><span>300s</span></div>
-            <label class="infinity-label">
-                <input type="checkbox" id="timer-infinity"> No timer (∞)
-            </label>
+            <label style="font-weight:700; margin-bottom:10px; display:block;">⏱ Timer Mode</label>
+            <div class="diff-radio-group" style="flex-wrap:wrap; gap:8px;">
+                <label style="flex:1; min-width:120px; background:#f5f5f5; border-radius:10px; padding:10px; cursor:pointer; border:2px solid transparent;" id="lbl-timer-move">
+                    <input type="radio" name="timer-type" value="move" checked style="margin-right:6px;">
+                    <strong>Move Timer</strong><br>
+                    <span style="font-size:0.8rem; opacity:0.6;">Each move has a countdown. Timeout plays a random move.</span>
+                </label>
+                <label style="flex:1; min-width:120px; background:#f5f5f5; border-radius:10px; padding:10px; cursor:pointer; border:2px solid transparent;" id="lbl-timer-game">
+                    <input type="radio" name="timer-type" value="game" style="margin-right:6px;">
+                    <strong>Game Timer</strong><br>
+                    <span style="font-size:0.8rem; opacity:0.6;">Each player has a total time budget. Running out = forfeit.</span>
+                </label>
+                <label style="flex:1; min-width:120px; background:#f5f5f5; border-radius:10px; padding:10px; cursor:pointer; border:2px solid transparent;" id="lbl-timer-none">
+                    <input type="radio" name="timer-type" value="none" style="margin-right:6px;">
+                    <strong>No Timer</strong><br>
+                    <span style="font-size:0.8rem; opacity:0.6;">Unlimited thinking time.</span>
+                </label>
+            </div>
         </div>
 
+        <!-- Move Timer Settings -->
+        <div class="settings-row" id="move-timer-row">
+            <label>Per-move time: <strong id="timer-setting-display">30s</strong></label>
+            <input type="range" id="timer-setting" min="10" max="300" step="5" value="30">
+            <div class="settings-hints"><span>10s</span><span>5 min</span></div>
+        </div>
+
+        <!-- Game Timer Settings -->
+        <div class="settings-row" id="game-timer-row" style="display:none;">
+            <label>Time per player: <strong id="game-time-display">5:00</strong></label>
+            <input type="range" id="game-time-setting" min="30" max="1800" step="30" value="300">
+            <div class="settings-hints"><span>30s</span><span>30 min</span></div>
+            <label style="margin-top:12px; display:block;">Increment (after each move): <strong id="increment-display">0s</strong></label>
+            <input type="range" id="increment-setting" min="0" max="30" step="1" value="0">
+            <div class="settings-hints"><span>0s</span><span>30s</span></div>
+        </div>
+
+        <!-- Who Goes First (online games) -->
+        <div class="settings-row" id="first-player-row">
+            <label style="margin-bottom:8px; display:block; font-weight:600;">👤 Who Goes First (X)</label>
+            <div class="diff-radio-group">
+                <label><input type="radio" name="first-player" value="host" checked> Host</label>
+                <label><input type="radio" name="first-player" value="joiner"> Joiner</label>
+                <label><input type="radio" name="first-player" value="random"> 🎲 Random</label>
+            </div>
+        </div>
+
+        <!-- AI Settings -->
         <div class="settings-row ai-difficulty-row" style="display:none;">
-            <label style="margin-bottom:8px; display:block; font-weight:600;">AI Difficulty</label>
+            <label style="margin-bottom:8px; display:block; font-weight:600;">🤖 AI Difficulty</label>
             <div class="diff-radio-group">
                 <label><input type="radio" name="ai-diff" value="easy"> 😅 Easy</label>
                 <label><input type="radio" name="ai-diff" value="medium" checked> 🤖 Medium</label>
@@ -67,10 +108,10 @@
         </div>
 
         <div class="settings-row ai-difficulty-row" style="display:none;">
-            <label style="margin-bottom:8px; display:block; font-weight:600;">Play as</label>
+            <label style="margin-bottom:8px; display:block; font-weight:600;">⚡ Play as</label>
             <div class="diff-radio-group">
-                <label><input type="radio" name="ai-order" value="first" checked> ⚡ Go First (X)</label>
-                <label><input type="radio" name="ai-order" value="second"> 🛡 Go Second (O)</label>
+                <label><input type="radio" name="ai-order" value="first" checked> Go First (X)</label>
+                <label><input type="radio" name="ai-order" value="second"> Go Second (O)</label>
             </div>
         </div>
 
@@ -94,7 +135,11 @@
                 <button id="rules-btn" title="Rules">📖</button>
                 <button id="settings-btn" class="button secondary small" title="Room settings" style="display:none;">⚙️ Settings</button>
                 <button id="leave-btn" class="button danger small" style="display:none;">Leave</button>
+                <button id="spectate-btn" class="button secondary small" style="display:none;">👁 Spectate</button>
+                <a href="/home" id="spectator-home-btn" class="button secondary small" style="display:none;">← Home</a>
                 <button id="action" class="button primary small" style="display:none;">Start</button>
+                <!-- Spectator join button -->
+                <button id="join-game-btn" class="button primary small" style="display:none;">▶ Join Game</button>
                 <div id="post-game-actions" style="display:none;">
                     <button id="rematch-btn" class="button primary small">Rematch</button>
                     <a href="{{ url_for('home') }}" id="home-btn" class="button secondary small">Home</a>
@@ -107,10 +152,17 @@
             <div id="timer-display" class="hidden"></div>
         </div>
 
+        <!-- Player info with per-player game clocks -->
         <div class="player-info-panel">
-            <div id="player-X" class="player-info"></div>
+            <div class="player-slot">
+                <div id="player-X" class="player-info"></div>
+                <div class="player-clock" id="clock-X" style="display:none;"></div>
+            </div>
             <div class="vs-separator">vs</div>
-            <div id="player-O" class="player-info"></div>
+            <div class="player-slot">
+                <div id="player-O" class="player-info"></div>
+                <div class="player-clock" id="clock-O" style="display:none;"></div>
+            </div>
         </div>
 
         <div class="board-wrapper">
