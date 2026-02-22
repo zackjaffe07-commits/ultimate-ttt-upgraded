@@ -12,6 +12,7 @@
     <span>Welcome, {{ current_user.username }}!</span>
     {% if not is_guest %}
         <a href="{{ url_for('profile') }}">Profile</a>
+        <a href="{{ url_for('leaderboard') }}">🏆 Leaderboard</a>
     {% endif %}
     <a href="{{ url_for('logout') }}">Logout</a>
 </div>
@@ -25,16 +26,31 @@
             <p class="error">{{ error }}</p>
         {% endif %}
 
+        <p class="section-label">vs Human</p>
         <div class="home-actions">
-            <button class="primary" id="create">⚔️ vs Human</button>
-            <button class="secondary" id="create-ai">🤖 vs AI</button>
+            {% if not is_guest %}
+                <button class="primary" id="create-ranked">🏆 Ranked</button>
+            {% endif %}
+            <button class="secondary" id="create-casual">🎮 Casual</button>
         </div>
-        <div class="home-actions" style="margin-top:0;">
+
+        <p class="section-label">vs Computer</p>
+        <div class="home-actions ai-row">
+            <button class="secondary ai-btn" data-diff="easy">🤖 Easy</button>
+            <button class="secondary ai-btn" data-diff="medium">🤖 Medium</button>
+            <button class="secondary ai-btn" data-diff="hard">🤖 Hard</button>
+        </div>
+
+        <p class="section-label">Local</p>
+        <div class="home-actions">
+            <a href="{{ url_for('local') }}" class="button secondary">👥 2 Players · Same Device</a>
+        </div>
+
+        <div class="home-actions" style="margin-top:4px;">
             <a href="{{ url_for('rules') }}" class="button secondary">📖 Rules</a>
         </div>
 
         <div class="divider">or join a game</div>
-
         <input id="room" placeholder="Enter room code">
         <button class="secondary" id="join">Join Game</button>
     </div>

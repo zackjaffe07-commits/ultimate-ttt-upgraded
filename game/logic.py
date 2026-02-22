@@ -46,7 +46,6 @@ class UltimateTicTacToe:
         player = self.current_player
         self.boards[b][c] = player
         self.last_move = [b, c]
-        self.move_history.append({"board": b, "cell": c, "player": player})
         if not self.board_winners[b]:
             winner, win_line = self.check_win(self.boards[b])
             if winner:
@@ -55,6 +54,20 @@ class UltimateTicTacToe:
         self.game_winner = self.check_game_winner()
         self.forced_board = c if self.board_winners[c] is None else None
         self.current_player = "O" if self.current_player == "X" else "X"
+        # Store move + full board snapshot AFTER all state updates
+        self.move_history.append({
+            "board": b, "cell": c, "player": player,
+            "snapshot": {
+                "boards": [list(row) for row in self.boards],
+                "winners": list(self.board_winners),
+                "boardWinLines": list(self.board_win_lines),
+                "forced": self.forced_board,
+                "lastMove": [b, c],
+                "player": self.current_player,
+                "gameWinner": self.game_winner,
+                "gameWinLine": self.game_win_line,
+            }
+        })
         return True
 
     def get_valid_moves(self):

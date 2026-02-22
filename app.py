@@ -9,8 +9,9 @@ from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_
 from game.logic import UltimateTicTacToe
-from game.ai import get_ai_move
-import random, string, os, time, math
+from game.ai import get_ai_move, maybe_taunt
+import random, string, os, time, math, json
+from functools import wraps
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a_secret_key')
@@ -21,15 +22,27 @@ socketio = SocketIO(app, async_mode='gevent')
 login_manager = LoginManager(app)
 login_manager.login_view = 'landing'
 
-MOVE_TIMEOUT = 30   # seconds per move
-ELO_K = 32
-DEFAULT_ELO = 1200
+# NOTE: Flask-Login's @login_required silently kills SocketIO events because
+# it tries to issue an HTTP redirect inside a WebSocket context.
+# Authentication is already enforced at the HTTP route level (@login_required on /home),
+# so logged-out users can never reach the page that creates the socket in the first place.
+# We use a no-op decorator here to keep the decorator syntax without breaking anything.
+def socket_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        return f(*args, **kwargs)
+    return decorated
 
-games = {}
-guest_games = {}
+
+MOVE_TIMEOUT = 30   # default seconds per move
+ELO_K        = 32
+DEFAULT_ELO  = 1000
+
+games        = {}
+guest_games  = {}
 active_players = set()
 
-# --- Models ---
+# ── Models ───────────────────────────────────────────────────────────────────
 class User(UserMixin, db.Model):
     id            = db.Column(db.Integer, primary_key=True)
     username      = db.Column(db.String(100), unique=True, nullable=False)
@@ -42,15 +55,18 @@ class User(UserMixin, db.Model):
     def check_password(self, p): return check_password_hash(self.password_hash, p)
 
 class Match(db.Model):
-    id          = db.Column(db.Integer, primary_key=True)
-    player1_id  = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    player2_id  = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    winner_id   = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    is_draw     = db.Column(db.Boolean, default=False, nullable=False)
-    timestamp   = db.Column(db.DateTime, server_default=db.func.now())
-    player1     = db.relationship('User', foreign_keys=[player1_id])
-    player2     = db.relationship('User', foreign_keys=[player2_id])
-    winner      = db.relationship('User', foreign_keys=[winner_id])
+    id                = db.Column(db.Integer, primary_key=True)
+    player1_id        = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    player2_id        = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    winner_id         = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    is_draw           = db.Column(db.Boolean, default=False, nullable=False)
+    is_ranked         = db.Column(db.Boolean, default=False, nullable=False)
+    game_id           = db.Column(db.String(8), nullable=True)
+    move_history_json = db.Column(db.Text, nullable=True)
+    timestamp         = db.Column(db.DateTime, server_default=db.func.now())
+    player1           = db.relationship('User', foreign_keys=[player1_id])
+    player2           = db.relationship('User', foreign_keys=[player2_id])
+    winner            = db.relationship('User', foreign_keys=[winner_id])
 
 class GuestUser(UserMixin):
     def __init__(self, user_id):
@@ -67,16 +83,17 @@ def load_user(user_id):
     if session.get('is_guest'): return GuestUser(session.get('guest_id'))
     return User.query.get(int(user_id))
 
-# --- ELO helper ---
+# ── ELO ──────────────────────────────────────────────────────────────────────
 def update_elo(winner: User, loser: User):
     exp_w = 1 / (1 + 10 ** ((loser.elo - winner.elo) / 400))
     exp_l = 1 - exp_w
     winner.elo = max(0, round(winner.elo + ELO_K * (1 - exp_w)))
     loser.elo  = max(0, round(loser.elo  + ELO_K * (0 - exp_l)))
 
-# --- Routes ---
+# ── Routes ───────────────────────────────────────────────────────────────────
 @app.route('/')
 def landing(): return render_template('landing.html')
+
 @app.route('/rules')
 def rules(): return render_template('rules.html')
 
@@ -136,48 +153,97 @@ def game(room):
         return render_template("home.html", error="Invalid room code", is_guest=session.get('is_guest', False))
     return render_template("game.html", room=room)
 
+@app.route("/local")
+@login_required
+def local():
+    return render_template("local.html")
+
 @app.route("/profile")
 @login_required
 def profile():
     if session.get('is_guest'):
         flash("Guests do not have profiles."); return redirect(url_for('home'))
     u = current_user
-    wins    = Match.query.filter_by(winner_id=u.id).count()
-    draws   = Match.query.filter(or_(Match.player1_id==u.id, Match.player2_id==u.id), Match.is_draw==True).count()
-    total   = Match.query.filter(or_(Match.player1_id==u.id, Match.player2_id==u.id)).count()
-    losses  = total - wins - draws
+    wins   = Match.query.filter_by(winner_id=u.id).count()
+    draws  = Match.query.filter(or_(Match.player1_id==u.id, Match.player2_id==u.id), Match.is_draw==True).count()
+    total  = Match.query.filter(or_(Match.player1_id==u.id, Match.player2_id==u.id)).count()
+    losses = total - wins - draws
     matches = Match.query.filter(or_(Match.player1_id==u.id, Match.player2_id==u.id)).order_by(Match.timestamp.desc()).all()
     return render_template("profile.html", user=u, matches=matches,
                            wins=wins, losses=losses, draws=draws)
 
-# --- Helpers ---
+@app.route("/leaderboard")
+@login_required
+def leaderboard():
+    users = User.query.all()
+    lb = []
+    for u in users:
+        ranked_games = Match.query.filter(
+            or_(Match.player1_id == u.id, Match.player2_id == u.id),
+            Match.is_ranked == True
+        ).count()
+        if ranked_games >= 10:
+            ranked_wins = Match.query.filter(
+                Match.winner_id == u.id, Match.is_ranked == True
+            ).count()
+            lb.append({
+                'user': u,
+                'ranked_games': ranked_games,
+                'ranked_wins': ranked_wins,
+                'win_rate': round(ranked_wins / ranked_games * 100),
+            })
+    lb.sort(key=lambda x: x['user'].elo, reverse=True)
+    return render_template('leaderboard.html', leaderboard=lb)
+
+@app.route("/match/<game_id>")
+@login_required
+def match_replay(game_id):
+    match = Match.query.filter_by(game_id=game_id).first_or_404()
+    history = json.loads(match.move_history_json) if match.move_history_json else []
+    players = {'X': match.player1.username, 'O': match.player2.username}
+    return render_template('match_replay.html', match=match, history=history,
+                           players=players, game_id=game_id)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def new_room(): return ''.join(random.choices(string.digits, k=5))
 def get_active_games(): return guest_games if session.get('is_guest') else games
 
-def make_game_data(player_accounts=None, players=None, spectators=None, chat_history=None, is_ai=False):
+def make_game_data(player_accounts=None, players=None, spectators=None,
+                   chat_history=None, is_ai=False, move_timeout=None,
+                   is_ranked=False, ai_difficulty='medium'):
     return {
-        "game": UltimateTicTacToe(),
+        "game":            UltimateTicTacToe(),
         "player_accounts": player_accounts or {},
-        "players": players or {},
-        "spectators": spectators or {},
-        "ready": set(),
-        "rematchReady": set(),
-        "chat_history": chat_history or [],
+        "players":         players or {},
+        "spectators":      spectators or {},
+        "ready":           set(),
+        "rematchReady":    set(),
+        "chat_history":    chat_history or [],
         "rematch_declined": False,
-        "move_deadline": None,
-        "is_ai": is_ai,
+        "move_deadline":   None,
+        "is_ai":           is_ai,
+        "move_timeout":    move_timeout if move_timeout is not None else MOVE_TIMEOUT,
+        "is_ranked":       is_ranked,
+        "ai_difficulty":   ai_difficulty,
     }
 
 def full_state(game_data):
-    """Return game state augmented with server-side timer info."""
     s = game_data["game"].state()
-    s["moveDeadline"] = game_data.get("move_deadline")
-    s["moveTimeout"] = MOVE_TIMEOUT
+    s["moveDeadline"]  = game_data.get("move_deadline")
+    s["moveTimeout"]   = game_data.get("move_timeout", MOVE_TIMEOUT)
+    s["serverNow"]     = time.time()
+    s["isAI"]          = game_data.get("is_ai", False)
+    s["aiDifficulty"]  = game_data.get("ai_difficulty", "medium")
+    s["isRanked"]      = game_data.get("is_ranked", False)
     return s
 
 def reset_timer(game_data):
+    timeout = game_data.get("move_timeout", MOVE_TIMEOUT)
     if game_data["game"].started and not game_data["game"].game_winner:
-        game_data["move_deadline"] = time.time() + MOVE_TIMEOUT
+        if timeout and timeout > 0:
+            game_data["move_deadline"] = time.time() + timeout
+        else:
+            game_data["move_deadline"] = None  # infinity — no deadline
     else:
         game_data["move_deadline"] = None
 
@@ -208,7 +274,7 @@ def emit_game_status(room):
                 p['button_rematch'] = 'rematch'
         else:
             p['text'] = f"Turn: {g.current_player}"; p['button_action'] = 'resign'
-        emit('gameStatus', p, room=sid)
+        emit('gameStatus', p, to=sid)
 
 def emit_spectator_list(room):
     gd = get_active_games().get(room)
@@ -216,70 +282,108 @@ def emit_spectator_list(room):
         emit('spectatorList', {'spectators': [s['username'] for s in gd['spectators'].values()]}, room=room)
 
 def record_match(game_data, winner_symbol):
-    for uid in game_data["player_accounts"].values(): active_players.discard(uid)
-    if session.get('is_guest') or len(game_data["player_accounts"]) < 2 or game_data.get("is_ai"): return
-    p1_id = game_data["player_accounts"]["X"]
-    p2_id = game_data["player_accounts"]["O"]
+    for uid in game_data["player_accounts"].values():
+        active_players.discard(uid)
+    if session.get('is_guest') or len(game_data["player_accounts"]) < 2 or game_data.get("is_ai"):
+        return
+
+    p1_id      = game_data["player_accounts"]["X"]
+    p2_id      = game_data["player_accounts"]["O"]
+    is_ranked  = game_data.get("is_ranked", False)
+    game_id    = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    hist_data  = [{'board': m['board'], 'cell': m['cell'], 'player': m['player']}
+                  for m in game_data["game"].move_history]
+    hist_json  = json.dumps(hist_data)
+
     if winner_symbol == "D":
-        match = Match(player1_id=p1_id, player2_id=p2_id, winner_id=None, is_draw=True)
-        # Reset streaks on draw? No — keep them.
+        match = Match(player1_id=p1_id, player2_id=p2_id, winner_id=None,
+                      is_draw=True, is_ranked=is_ranked,
+                      game_id=game_id, move_history_json=hist_json)
     else:
         winner_id = game_data["player_accounts"][winner_symbol]
         loser_id  = p1_id if winner_id == p2_id else p2_id
-        match = Match(player1_id=p1_id, player2_id=p2_id, winner_id=winner_id, is_draw=False)
+        match = Match(player1_id=p1_id, player2_id=p2_id, winner_id=winner_id,
+                      is_draw=False, is_ranked=is_ranked,
+                      game_id=game_id, move_history_json=hist_json)
         w = User.query.get(winner_id)
         l = User.query.get(loser_id)
         if w and l:
-            update_elo(w, l)
+            if is_ranked:
+                update_elo(w, l)
+            # Both ranked and casual affect streaks
             w.win_streak  = (w.win_streak or 0) + 1
             w.best_streak = max(w.best_streak or 0, w.win_streak)
             l.win_streak  = 0
-    db.session.add(match); db.session.commit()
+    db.session.add(match)
+    db.session.commit()
 
-# --- SocketIO Events ---
+
+def _get_socket_user_id():
+    """Get the current user's ID safely from session (for use in SocketIO handlers)."""
+    if session.get('is_guest'):
+        return session.get('guest_id')
+    # Flask-Login stores user id under '_user_id' in the session
+    uid = session.get('_user_id') or session.get('user_id')
+    return str(uid) if uid else None
+
+def _get_socket_username():
+    """Get the current user's username safely (for use in SocketIO handlers)."""
+    if session.get('is_guest'):
+        gid = session.get('guest_id', '?????')
+        return f"Guest_{gid[:5]}"
+    uid = session.get('_user_id') or session.get('user_id')
+    if uid:
+        u = User.query.get(int(uid))
+        if u:
+            return u.username
+    return 'Unknown'
+
+# ── SocketIO Events ───────────────────────────────────────────────────────────
 @socketio.on("create")
-@login_required
+@socket_auth
 def create(data=None):
-    if current_user.get_id() in active_players:
+    if _get_socket_user_id() in active_players:
         emit('already_in_game', {'error': 'You are already in a game.'}); return
     active_games = get_active_games()
-    room = new_room()
-    is_ai = bool(data and data.get('ai'))
-    active_games[room] = make_game_data(is_ai=is_ai)
+    room         = new_room()
+    is_ai        = bool(data and data.get('ai'))
+    # Guests cannot play ranked — enforce server-side regardless of what the client sends
+    is_ranked    = bool(data and data.get('ranked')) and not is_ai and not session.get('is_guest')
+    ai_diff      = (data.get('difficulty', 'medium') if data else 'medium')
+    active_games[room] = make_game_data(is_ai=is_ai, is_ranked=is_ranked, ai_difficulty=ai_diff)
     emit("created", room)
 
 @socketio.on("join")
-@login_required
+@socket_auth
 def join(data):
     active_games = get_active_games()
     room = data["room"]; sid = request.sid
     game_data = active_games.get(room)
     if not game_data: emit("invalid"); return
-    user_id = current_user.get_id()
+    user_id   = _get_socket_user_id()
     is_locked = user_id in game_data.get("player_accounts", {}).values()
     if not is_locked and user_id in active_players:
         emit('already_in_game', {'error': 'You are already in another game.'}); return
     join_room(room)
     players = game_data["players"]
-    pa = game_data["player_accounts"]
+    pa      = game_data["player_accounts"]
     if is_locked:
-        symbol = next(s for s, uid in pa.items() if uid == user_id)
+        symbol  = next(s for s, uid in pa.items() if uid == user_id)
         old_sid = next((s for s, p in players.items() if p.get('user_id') == user_id), None)
         if old_sid: del players[old_sid]
-        players[sid] = {"symbol": symbol, "user_id": user_id, "username": current_user.username}
+        players[sid] = {"symbol": symbol, "user_id": user_id, "username": _get_socket_username()}
         emit("assign", symbol)
     elif len(pa) < 2:
         symbol = "X" if "X" not in pa else "O"
         pa[symbol] = user_id
-        players[sid] = {"symbol": symbol, "user_id": user_id, "username": current_user.username}
+        players[sid] = {"symbol": symbol, "user_id": user_id, "username": _get_socket_username()}
         active_players.add(user_id)
         emit("assign", symbol)
-        # If AI mode and this is the first human (X), add the AI as O
         if game_data.get("is_ai") and symbol == "X":
             pa["O"] = "AI"
             players["AI"] = {"symbol": "O", "user_id": "AI", "username": "🤖 AI"}
     else:
-        game_data["spectators"][sid] = {"user_id": user_id, "username": current_user.username}
+        game_data["spectators"][sid] = {"user_id": user_id, "username": _get_socket_username()}
         emit("spectator")
     if game_data.get("chat_history"):
         emit('chatHistory', {'history': game_data["chat_history"]})
@@ -288,13 +392,12 @@ def join(data):
     emit_spectator_list(room)
 
 @socketio.on("ready")
-@login_required
+@socket_auth
 def ready(data):
     active_games = get_active_games(); room = data["room"]; sid = request.sid
     game_data = active_games.get(room)
     if not game_data or sid not in game_data["players"]: return
     game_data["ready"].add(sid)
-    # For AI games, auto-ready when the human is ready
     if game_data.get("is_ai"): game_data["ready"].add("AI")
     if len(game_data["player_accounts"]) == 2 and len(game_data["ready"]) >= 2:
         game_data["game"].started = True
@@ -303,13 +406,12 @@ def ready(data):
     emit_game_status(room)
 
 @socketio.on("move")
-@login_required
+@socket_auth
 def move(data):
     game_data = get_active_games().get(data["room"])
     if not game_data: return
-    # Validate timer
     deadline = game_data.get("move_deadline")
-    if deadline and time.time() > deadline + 2:  # 2s grace
+    if deadline and time.time() > deadline + 2:
         return
     g = game_data["game"]
     if g.make_move(data["board"], data["cell"]):
@@ -318,10 +420,18 @@ def move(data):
             record_match(game_data, g.game_winner)
         else:
             reset_timer(game_data)
-            # AI move
+            # AI turn
             if game_data.get("is_ai") and not g.game_winner:
-                ai_b, ai_c = get_ai_move(g)
+                diff    = game_data.get("ai_difficulty", "medium")
+                ai_b, ai_c = get_ai_move(g, diff)
                 g.make_move(ai_b, ai_c)
+                # AI taunt
+                taunt = maybe_taunt(diff)
+                if taunt:
+                    ai_sym = next((p['symbol'] for sid, p in game_data['players'].items() if sid == 'AI'), 'O')
+                    entry  = {'username': '🤖 AI', 'message': taunt, 'is_spectator': False, 'symbol': ai_sym}
+                    game_data['chat_history'].append(entry)
+                    emit('chatMessage', entry, room=data["room"])
                 if g.game_winner:
                     game_data["move_deadline"] = None
                     record_match(game_data, g.game_winner)
@@ -331,51 +441,117 @@ def move(data):
         emit_game_status(data["room"])
 
 @socketio.on("timeout")
-@login_required
+@socket_auth
 def timeout(data):
-    """Client reports that the move timer has expired."""
     room = data.get("room")
     game_data = get_active_games().get(room)
     if not game_data: return
     g = game_data["game"]
     if g.game_winner or not g.started: return
     deadline = game_data.get("move_deadline")
-    if deadline and time.time() >= deadline - 1:  # 1s tolerance
-        # The player whose turn it is forfeits
-        timed_out_player = g.current_player
-        g.resign(timed_out_player)
+    if not deadline: return          # infinity mode — no timeout
+    if time.time() >= deadline - 1:
+        timed_out = g.current_player
+        g.resign(timed_out)
         game_data["move_deadline"] = None
         record_match(game_data, g.game_winner)
         emit("state", full_state(game_data), room=room)
         emit_game_status(room)
 
 @socketio.on("rematch")
-@login_required
+@socket_auth
 def rematch(data):
     active_games = get_active_games(); room = data["room"]; sid = request.sid
-    game_data = active_games.get(room)
+    game_data    = active_games.get(room)
     if not game_data or sid not in game_data["players"] or game_data.get('rematch_declined'): return
     game_data["rematchReady"].add(sid)
     if game_data.get("is_ai"): game_data["rematchReady"].add("AI")
     if len(game_data["rematchReady"]) >= 2:
-        pa = game_data["player_accounts"]
-        active_games[room] = make_game_data(
-            player_accounts=pa, players=game_data["players"],
-            spectators=game_data["spectators"], chat_history=game_data.get("chat_history", []),
-            is_ai=game_data.get("is_ai", False)
+        old_pa = game_data["player_accounts"]
+        # Swap X and O
+        new_pa = {}
+        if "X" in old_pa and "O" in old_pa:
+            new_pa["X"] = old_pa["O"]
+            new_pa["O"] = old_pa["X"]
+        else:
+            new_pa = old_pa
+        # Update symbols in players dict
+        new_players = {}
+        for s, p in game_data["players"].items():
+            new_sym = "O" if p["symbol"] == "X" else "X"
+            new_players[s] = {**p, "symbol": new_sym}
+            if s != "AI":
+                emit("assign", new_sym, to=s)
+        new_gd = make_game_data(
+            player_accounts=new_pa, players=new_players,
+            spectators=game_data["spectators"],
+            chat_history=game_data.get("chat_history", []),
+            is_ai=game_data.get("is_ai", False),
+            move_timeout=game_data.get("move_timeout", MOVE_TIMEOUT),
+            is_ranked=game_data.get("is_ranked", False),
+            ai_difficulty=game_data.get("ai_difficulty", "medium"),
         )
+        active_games[room] = new_gd
         emit("rematchAgreed", room=room)
-        emit("state", full_state(active_games[room]), room=room)
+        emit("state", full_state(new_gd), room=room)
     emit_game_status(room)
 
 @socketio.on("leave_post_game")
-@login_required
+@socket_auth
 def leave_post_game(data):
     active_games = get_active_games(); room = data["room"]
-    game_data = active_games.get(room)
+    game_data    = active_games.get(room)
     if not game_data: return
     game_data['rematch_declined'] = True
     emit_game_status(room)
+
+@socketio.on("leave_pre_game")
+@socket_auth
+def leave_pre_game(data):
+    active_games = get_active_games()
+    room         = data.get("room")
+    game_data    = active_games.get(room)
+    if not game_data or game_data['game'].started: return
+    sid     = request.sid
+    user_id = _get_socket_user_id()
+    if sid in game_data['players']:
+        symbol = game_data['players'][sid].get('symbol')
+        del game_data['players'][sid]
+        if symbol:
+            game_data['player_accounts'].pop(symbol, None)
+        active_players.discard(user_id)
+        game_data['ready'].discard(sid)
+        leave_room(room)
+        emit_game_status(room)
+
+@socketio.on("update_settings")
+@socket_auth
+def update_settings(data):
+    active_games = get_active_games()
+    room         = data.get("room")
+    game_data    = active_games.get(room)
+    if not game_data or game_data['game'].started: return
+    sid    = request.sid
+    player = game_data['players'].get(sid)
+    if not player or player['symbol'] != 'X': return
+
+    # Timer
+    raw_timeout = data.get('move_timeout')
+    if raw_timeout is None or raw_timeout == 0:
+        game_data['move_timeout'] = 0  # infinity
+    else:
+        game_data['move_timeout'] = max(10, min(300, int(raw_timeout)))
+
+    # AI difficulty (only when AI game)
+    if game_data.get('is_ai'):
+        diff = data.get('ai_difficulty', game_data.get('ai_difficulty', 'medium'))
+        if diff in ('easy', 'medium', 'hard'):
+            game_data['ai_difficulty'] = diff
+
+    emit('settingsUpdated', {
+        'move_timeout':  game_data['move_timeout'],
+        'ai_difficulty': game_data.get('ai_difficulty', 'medium'),
+    }, room=room)
 
 @socketio.on('disconnect')
 def disconnect():
@@ -395,28 +571,28 @@ def disconnect():
                 return
 
 @socketio.on('chat')
-@login_required
+@socket_auth
 def chat(data):
     room = data['room']; message = data['message']
     game_data = get_active_games().get(room)
     if not game_data: return
-    is_spectator = request.sid in game_data['spectators']
+    is_spectator  = request.sid in game_data['spectators']
     player_symbol = None
     if not is_spectator:
         pd = game_data['players'].get(request.sid)
         if pd: player_symbol = pd['symbol']
-    entry = {'username': current_user.username, 'message': message,
+    entry = {'username': _get_socket_username(), 'message': message,
              'is_spectator': is_spectator, 'symbol': player_symbol}
     game_data["chat_history"].append(entry)
     emit('chatMessage', entry, room=room)
 
 @socketio.on("resign")
-@login_required
+@socket_auth
 def resign(data):
     game_data = get_active_games().get(data["room"])
     if not game_data: return
-    g = game_data["game"]
-    loser = data["symbol"]
+    g      = game_data["game"]
+    loser  = data["symbol"]
     winner = "X" if loser == "O" else "O"
     g.resign(loser)
     game_data["move_deadline"] = None
@@ -424,7 +600,34 @@ def resign(data):
     emit("state", full_state(game_data), room=data["room"])
     emit_game_status(data["room"])
 
-if __name__ == "__main__":
+def _ensure_db_columns():
+    """Add columns that exist in the model but are missing from the DB (avoids needing flask db upgrade)."""
+    from sqlalchemy import inspect, text
     with app.app_context():
         db.create_all()
+        insp = inspect(db.engine)
+        match_cols = {c['name'] for c in insp.get_columns('match')}
+        user_cols  = {c['name'] for c in insp.get_columns('user')}
+        with db.engine.connect() as conn:
+            for col, sql in [
+                ('is_ranked',         'ALTER TABLE "match" ADD COLUMN is_ranked BOOLEAN NOT NULL DEFAULT 0'),
+                ('game_id',           'ALTER TABLE "match" ADD COLUMN game_id VARCHAR(8)'),
+                ('move_history_json', 'ALTER TABLE "match" ADD COLUMN move_history_json TEXT'),
+            ]:
+                if col not in match_cols:
+                    conn.execute(text(sql))
+                    print(f"[db] Added match.{col}")
+            for col, sql in [
+                ('elo',          'ALTER TABLE "user" ADD COLUMN elo INTEGER NOT NULL DEFAULT 1000'),
+                ('win_streak',   'ALTER TABLE "user" ADD COLUMN win_streak INTEGER NOT NULL DEFAULT 0'),
+                ('best_streak',  'ALTER TABLE "user" ADD COLUMN best_streak INTEGER NOT NULL DEFAULT 0'),
+            ]:
+                if col not in user_cols:
+                    conn.execute(text(sql))
+                    print(f"[db] Added user.{col}")
+            conn.commit()
+
+_ensure_db_columns()
+
+if __name__ == "__main__":
     socketio.run(app, debug=True)

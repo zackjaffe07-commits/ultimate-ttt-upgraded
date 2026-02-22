@@ -8,7 +8,6 @@
 </head>
 <body class="bg" data-username="{{ current_user.username }}">
 
-<!-- Confetti canvas -->
 <canvas id="confetti-canvas"></canvas>
 
 <!-- Victory Modal -->
@@ -19,16 +18,74 @@
     </div>
 </div>
 
+<!-- Rules Modal -->
+<div id="rules-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-content rules-modal-content">
+        <div class="rules-modal-header">
+            <h2>📖 How to Play</h2>
+            <button id="rules-close-btn" class="button secondary small">✕ Close</button>
+        </div>
+        <div class="rules-body">
+            <h3>The Basics</h3>
+            <p>Ultimate Tic-Tac-Toe is played on a large 3×3 grid, where each cell contains a smaller 3×3 board.</p>
+            <h3>The Golden Rule</h3>
+            <p><strong>The cell you pick in a small board determines which small board your opponent must play in next.</strong></p>
+            <h3>Winning a Small Board</h3>
+            <p>Get three of your marks in a row on any small board. That board is then yours.</p>
+            <h3>Winning the Game</h3>
+            <p>Win three small boards in a row on the large grid.</p>
+            <h3>Tiebreaker</h3>
+            <p>If all small boards are decided and nobody has 3 in a row, the player with the most won small boards wins. Equal = draw.</p>
+            <h3>Free Choice</h3>
+            <p>If you're sent to an already-won or full board, you may play on <strong>any open cell</strong> in any available board.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settings-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-content settings-modal-content">
+        <h2>⚙️ Room Settings</h2>
+        <p class="subtitle">Only the host (X) can change these</p>
+
+        <div class="settings-row">
+            <label>Move Timer: <strong id="timer-setting-display">30s</strong></label>
+            <input type="range" id="timer-setting" min="10" max="300" step="5" value="30">
+            <div class="settings-hints"><span>10s</span><span>300s</span></div>
+            <label class="infinity-label">
+                <input type="checkbox" id="timer-infinity"> No timer (∞)
+            </label>
+        </div>
+
+        <div class="settings-row ai-difficulty-row" style="display:none;">
+            <label style="margin-bottom:8px; display:block; font-weight:600;">AI Difficulty</label>
+            <div class="diff-radio-group">
+                <label><input type="radio" name="ai-diff" value="easy"> 😅 Easy</label>
+                <label><input type="radio" name="ai-diff" value="medium" checked> 🤖 Medium</label>
+                <label><input type="radio" name="ai-diff" value="hard"> 💀 Hard</label>
+            </div>
+        </div>
+
+        <div class="settings-actions">
+            <button id="settings-apply-btn" class="button primary small">Apply</button>
+            <button id="settings-cancel-btn" class="button secondary small">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <div class="game-page-layout">
     <!-- ===== GAME AREA ===== -->
     <div class="game-container">
         <div class="top-bar">
             <div>
-                <h2>Room: {{ room }}</h2>
+                <h2>Room: {{ room }} <span id="ranked-badge" class="ranked-badge" style="display:none;">🏆 Ranked</span></h2>
                 <p id="player" class="muted"></p>
             </div>
-            <div style="display:flex; gap:6px; align-items:center;">
+            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                 <button id="sound-toggle" title="Toggle sound">🔊</button>
+                <button id="rules-btn" title="Rules">📖</button>
+                <button id="settings-btn" title="Room settings" style="display:none;">⚙️</button>
+                <button id="leave-btn" class="button danger small" style="display:none;">Leave</button>
                 <button id="action" class="button primary small" style="display:none;">Start</button>
                 <div id="post-game-actions" style="display:none;">
                     <button id="rematch-btn" class="button primary small">Rematch</button>
@@ -42,7 +99,6 @@
             <div id="timer-display" class="hidden"></div>
         </div>
 
-        <!-- Player Panel -->
         <div class="player-info-panel">
             <div id="player-X" class="player-info"></div>
             <div class="vs-separator">vs</div>
@@ -62,7 +118,14 @@
         </div>
 
         <div class="card sidebar-card move-history-card">
-            <h3>Move History</h3>
+            <div class="move-history-header">
+                <h3>Move History</h3>
+                <span id="history-nav-hint" class="history-nav-hint" style="display:none;">← → to navigate</span>
+            </div>
+            <div id="history-viewing-banner" class="history-viewing-banner" style="display:none;">
+                <span id="history-viewing-label">Viewing move 1</span>
+                <button id="history-return-btn" class="button secondary small">▶ Live</button>
+            </div>
             <ul id="move-history-list"><li style="color:#aaa; font-size:0.85rem;">No moves yet.</li></ul>
         </div>
 

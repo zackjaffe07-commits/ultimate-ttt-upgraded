@@ -12,7 +12,10 @@
     <div class="card profile-card">
         <div class="profile-header">
             <h1>{{ user.username }}</h1>
-            <a href="{{ url_for('home') }}" class="button secondary small">Home</a>
+            <div style="display:flex;gap:8px;">
+                <a href="{{ url_for('leaderboard') }}" class="button secondary small">🏆 Leaderboard</a>
+                <a href="{{ url_for('home') }}" class="button secondary small">Home</a>
+            </div>
         </div>
 
         <div class="stats-grid">
@@ -30,7 +33,7 @@
             </div>
             <div class="stat-item elo">
                 <h2>{{ user.elo }}</h2>
-                <p>ELO Rating</p>
+                <p>ELO (Ranked)</p>
             </div>
             <div class="stat-item streak">
                 <h2>{{ user.win_streak }}</h2>
@@ -50,16 +53,23 @@
                 {% set result = 'draw' if match.is_draw else ('win' if match.winner_id == user.id else 'loss') %}
                 <li class="match-item {{ result }}">
                     <div class="match-result {{ result }}">
-                        {% if match.is_draw %}Draw
-                        {% elif match.winner_id == user.id %}Win
-                        {% else %}Loss{% endif %}
+                        {% if match.is_draw %}Draw{% elif match.winner_id == user.id %}Win{% else %}Loss{% endif %}
                     </div>
                     <div class="match-opponent">
                         vs.
-                        {% if match.player1_id == user.id %}{{ match.player2.username }}
-                        {% else %}{{ match.player1.username }}{% endif %}
+                        {% if match.player1_id == user.id %}{{ match.player2.username }}{% else %}{{ match.player1.username }}{% endif %}
+                        {% if match.is_ranked %}
+                            <span class="ranked-badge-small">Ranked</span>
+                        {% else %}
+                            <span class="casual-badge-small">Casual</span>
+                        {% endif %}
                     </div>
-                    <div class="match-timestamp">{{ match.timestamp.strftime('%b %d, %Y') }}</div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        {% if match.game_id %}
+                            <a href="{{ url_for('match_replay', game_id=match.game_id) }}" class="replay-link" title="Watch replay">🎬</a>
+                        {% endif %}
+                        <div class="match-timestamp">{{ match.timestamp.strftime('%b %d, %Y') }}</div>
+                    </div>
                 </li>
             {% else %}
                 <li>No matches played yet.</li>

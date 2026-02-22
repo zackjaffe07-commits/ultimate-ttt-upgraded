@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard — Ultimate TTT</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+
+<div class="profile-layout">
+    <div class="card profile-card">
+        <div class="profile-header">
+            <h1>🏆 Leaderboard</h1>
+            <a href="{{ url_for('home') }}" class="button secondary small">Home</a>
+        </div>
+        <p class="subtitle" style="margin-bottom:16px;">Players with 10+ ranked games, sorted by ELO</p>
+
+        {% if leaderboard %}
+        <table class="lb-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Player</th>
+                    <th>ELO</th>
+                    <th>Ranked</th>
+                    <th>Wins</th>
+                    <th>Win %</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in leaderboard %}
+                {% set i = loop.index0 %}
+                <tr class="lb-row {% if entry.user.id == current_user.id %}lb-me{% endif %}">
+                    <td class="lb-rank">
+                        {% if i == 0 %}🥇{% elif i == 1 %}🥈{% elif i == 2 %}🥉{% else %}{{ i + 1 }}{% endif %}
+                    </td>
+                    <td class="lb-username">{{ entry.user.username }}</td>
+                    <td class="lb-elo">{{ entry.user.elo }}</td>
+                    <td>{{ entry.ranked_games }}</td>
+                    <td>{{ entry.ranked_wins }}</td>
+                    <td>
+                        <div class="win-rate-bar">
+                            <div class="win-rate-fill" style="width:{{ entry.win_rate }}%"></div>
+                            <span>{{ entry.win_rate }}%</span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div style="text-align:center; padding:40px; opacity:0.6;">
+            <p style="font-size:3rem;">🏆</p>
+            <p>No players have completed 10 ranked games yet.</p>
+            <p>Play ranked games to appear here!</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+</body>
+</html>

@@ -1,29 +1,79 @@
 const socket = io();
 
-const createBtn   = document.getElementById("create");
-const createAiBtn = document.getElementById("create-ai");
-const joinBtn     = document.getElementById("join");
-const roomInput   = document.getElementById("room");
+// ── Debug: confirm socket connects ───────────────────────────────────────────
+socket.on('connect', () => {
+    console.log('[socket] Connected. SID:', socket.id);
+});
+socket.on('connect_error', (err) => {
+    console.error('[socket] Connection error:', err.message);
+});
+socket.on('disconnect', (reason) => {
+    console.warn('[socket] Disconnected:', reason);
+});
 
-createBtn.onclick   = () => socket.emit("create", {});
-createAiBtn.onclick = () => socket.emit("create", { ai: true });
-
-socket.on("created", room => { window.location.href = `/game/${room}`; });
-
-function joinGame() {
-    const room = roomInput.value.trim();
-    if (room) window.location.href = `/game/${room}`;
+// ── Safe helper: attach click handler only if element exists ──────────────────
+function onClick(id, fn) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.addEventListener('click', fn);
+    } else {
+        console.warn('[home.js] Element not found:', id);
+    }
 }
-joinBtn.onclick = joinGame;
-roomInput.onkeydown = e => { if (e.key === 'Enter') joinGame(); };
+
+// ── Button wiring ─────────────────────────────────────────────────────────────
+onClick('create-ranked', () => {
+    console.log('[socket] Emitting: create { ranked: true }');
+    socket.emit('create', { ranked: true });
+});
+
+onClick('create-casual', () => {
+    console.log('[socket] Emitting: create { ranked: false }');
+    socket.emit('create', { ranked: false });
+});
+
+document.querySelectorAll('.ai-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const diff = btn.dataset.diff;
+        console.log('[socket] Emitting: create { ai: true, difficulty:', diff, '}');
+        socket.emit('create', { ai: true, difficulty: diff });
+    });
+});
+
+onClick('join', joinGame);
+
+const roomInput = document.getElementById('room');
+if (roomInput) {
+    roomInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') joinGame();
+    });
+}
+
+// ── Join game ─────────────────────────────────────────────────────────────────
+function joinGame() {
+    const code = roomInput ? roomInput.value.trim() : '';
+    if (code) {
+        console.log('[socket] Joining room:', code);
+        window.location.href = `/game/${code}`;
+    }
+}
+
+// ── Server responses ──────────────────────────────────────────────────────────
+socket.on('created', room => {
+    console.log('[socket] Room created:', room, '— redirecting to /game/' + room);
+    window.location.href = `/game/${room}`;
+});
 
 socket.on('already_in_game', data => {
+    console.warn('[socket] Already in game:', data.error);
     let err = document.querySelector('.error');
     if (!err) {
         err = document.createElement('div');
         err.className = 'error';
         const sub = document.querySelector('.subtitle');
-        sub ? sub.insertAdjacentElement('afterend', err) : document.querySelector('.home-card').prepend(err);
+        sub
+            ? sub.insertAdjacentElement('afterend', err)
+            : document.querySelector('.home-card').prepend(err);
     }
     err.textContent = data.error;
     err.style.display = 'block';

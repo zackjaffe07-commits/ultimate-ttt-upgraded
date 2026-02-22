@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Replay {{ game_id }} — Ultimate TTT</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+
+<div class="game-page-layout">
+    <div class="game-container">
+        <div class="top-bar">
+            <div>
+                <h2>🎬 Replay <span class="replay-id">{{ game_id }}</span></h2>
+                <p class="muted">{{ match.timestamp.strftime('%b %d, %Y') }}
+                    {% if match.is_ranked %}<span class="ranked-badge">🏆 Ranked</span>{% else %}<span class="casual-badge">🎮 Casual</span>{% endif %}
+                </p>
+            </div>
+            <div style="display:flex; gap:6px; align-items:center;">
+                <a href="{{ url_for('profile') }}" class="button secondary small">← Profile</a>
+            </div>
+        </div>
+
+        <div class="status-card">
+            <p id="replay-status">Use arrow keys or the list to navigate moves</p>
+            <div id="replay-counter" style="font-weight:700; font-size:1.1rem; padding:3px 12px; background:rgba(255,255,255,0.2); border-radius:8px;">
+                — / {{ history|length }}
+            </div>
+        </div>
+
+        <div class="player-info-panel">
+            <div class="player-info">
+                <div class="symbol X">X</div>
+                <div class="username">{{ players.X }}</div>
+            </div>
+            <div class="vs-separator">vs</div>
+            <div class="player-info">
+                <div class="symbol O">O</div>
+                <div class="username">{{ players.O }}</div>
+            </div>
+        </div>
+
+        <!-- Navigation controls -->
+        <div class="replay-nav">
+            <button id="nav-start"  class="button secondary small" title="First move">⏮</button>
+            <button id="nav-prev"   class="button secondary small" title="Previous (←)">◀ Prev</button>
+            <button id="nav-next"   class="button secondary small" title="Next (→)">Next ▶</button>
+            <button id="nav-end"    class="button secondary small" title="Last move">⏭</button>
+        </div>
+
+        <div class="board-wrapper">
+            <div id="board"></div>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <div class="card sidebar-card move-history-card" style="max-height:500px;">
+            <h3>Moves</h3>
+            <ul id="move-history-list" style="max-height:430px;"></ul>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/uttt.js') }}"></script>
+<script>
+const RAW_HISTORY = {{ history | tojson }};
+const PLAYERS     = {{ players | tojson }};
+
+// Build all snapshots by replaying the game
+const SNAPSHOTS = UTTT.buildSnapshots(RAW_HISTORY);
+
+let currentIndex = -1;  // -1 = start (empty board)
+const totalMoves = SNAPSHOTS.length;
+
+const boardDiv       = document.getElementById("board");
+const replayStatus   = document.getElementById("replay-status");
+const replayCounter  = document.getElementById("replay-counter");
+const moveHistList   = document.getElementById("move-history-list");
+
+// Build the initial empty state for the starting position
+const EMPTY_STATE = {
+    boards:        Array(9).fill(null).map(() => Array(9).fill(null)),
+    winners:       Array(9).fill(null),
+    boardWinLines: Array(9).fill(null),
+    forced:        null,
+    lastMove:      null,
+    player:        'X',
+    gameWinner:    null,
+    gameWinLine:   null,
+    started:       true,
+};
+
+// ── Board rendering ─────────────────────────────────────────────────────────
+function drawState(state) {
+    boardDiv.innerHTML = "";
+    for (let b = 0; b < 9; b++) {
+        const mini = document.createElement("div");
+        mini.className = "mini-board";
+        const boardWon  = state.winners[b];
+        const isMetaWin = state.gameWinLine && state.gameWinLine.includes(b);
+        if (boardWon && boardWon !== 'D') {
+            mini.classList.add(`won-${boardWon}`);
+            const ov = document.createElement("span");
+            ov.className = `overlay ${boardWon}`; ov.textContent = boardWon;
+            mini.appendChild(ov);
+        }
+        if (isMetaWin) mini.classList.add('game-win');
+        for (let c = 0; c < 9; c++) {
+            const cell = document.createElement("div");
+            const sym  = state.boards[b][c];
+            cell.className = "cell no-click";
+            if (sym) { cell.classList.add(sym); cell.textContent = sym; }
+            if (state.lastMove && state.lastMove[0]===b && state.lastMove[1]===c)
+                cell.classList.add('last-move');
+            if (boardWon && boardWon!=='D' && state.boardWinLines && state.boardWinLines[b])
+                if (state.boardWinLines[b].includes(c)) cell.classList.add('win-cell');
+            mini.appendChild(cell);
+        }
+        boardDiv.appendChild(mini);
+    }
+}
+
+// ── Move history list ────────────────────────────────────────────────────────
+function buildMoveList() {
+    moveHistList.innerHTML = '';
+    RAW_HISTORY.forEach((m, i) => {
+        const li  = document.createElement('li');
+        const cls = m.player === 'X' ? 'hist-x' : 'hist-o';
+        li.innerHTML = `<span class="hist-num">${i+1}.</span> <span class="${cls}">${m.player}</span> → B${m.board+1} C${m.cell+1}`;
+        li.dataset.index = i;
+        li.classList.add('history-item');
+        li.onclick = () => goTo(i);
+        moveHistList.insertBefore(li, moveHistList.firstChild);
+    });
+}
+
+function updateListHighlight() {
+    [...moveHistList.querySelectorAll('li.history-item')].forEach(li => {
+        li.classList.toggle('history-selected', parseInt(li.dataset.index) === currentIndex);
+    });
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function goTo(index) {
+    currentIndex = Math.max(-1, Math.min(totalMoves - 1, index));
+    const state  = currentIndex === -1 ? EMPTY_STATE : SNAPSHOTS[currentIndex].snapshot;
+    drawState(state);
+    updateListHighlight();
+
+    if (currentIndex === -1) {
+        replayStatus.textContent  = "Start of game — X goes first";
+        replayCounter.textContent = `0 / ${totalMoves}`;
+    } else {
+        const m = RAW_HISTORY[currentIndex];
+        const postState = SNAPSHOTS[currentIndex].snapshot;
+        const mover = m.player === 'X' ? PLAYERS.X : PLAYERS.O;
+        replayStatus.textContent = postState.gameWinner
+            ? (postState.gameWinner === 'D' ? "Game ended in a draw." : `${postState.gameWinner === 'X' ? PLAYERS.X : PLAYERS.O} wins!`)
+            : `${mover} played → Board ${m.board+1}, Cell ${m.cell+1}`;
+        replayCounter.textContent = `${currentIndex+1} / ${totalMoves}`;
+    }
+}
+
+document.getElementById("nav-start").onclick = () => goTo(-1);
+document.getElementById("nav-prev").onclick  = () => goTo(currentIndex - 1);
+document.getElementById("nav-next").onclick  = () => goTo(currentIndex + 1);
+document.getElementById("nav-end").onclick   = () => goTo(totalMoves - 1);
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); goTo(currentIndex - 1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); goTo(currentIndex + 1); }
+    if (e.key === 'Home')       { e.preventDefault(); goTo(-1); }
+    if (e.key === 'End')        { e.preventDefault(); goTo(totalMoves - 1); }
+});
+
+// Init
+buildMoveList();
+goTo(-1);
+</script>
+</body>
+</html>
