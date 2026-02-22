@@ -66,6 +66,14 @@
             </div>
         </div>
 
+        <div class="settings-row ai-difficulty-row" style="display:none;">
+            <label style="margin-bottom:8px; display:block; font-weight:600;">Play as</label>
+            <div class="diff-radio-group">
+                <label><input type="radio" name="ai-order" value="first" checked> ⚡ Go First (X)</label>
+                <label><input type="radio" name="ai-order" value="second"> 🛡 Go Second (O)</label>
+            </div>
+        </div>
+
         <div class="settings-actions">
             <button id="settings-apply-btn" class="button primary small">Apply</button>
             <button id="settings-cancel-btn" class="button secondary small">Cancel</button>
@@ -84,7 +92,7 @@
             <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                 <button id="sound-toggle" title="Toggle sound">🔊</button>
                 <button id="rules-btn" title="Rules">📖</button>
-                <button id="settings-btn" title="Room settings" style="display:none;">⚙️</button>
+                <button id="settings-btn" class="button secondary small" title="Room settings" style="display:none;">⚙️ Settings</button>
                 <button id="leave-btn" class="button danger small" style="display:none;">Leave</button>
                 <button id="action" class="button primary small" style="display:none;">Start</button>
                 <div id="post-game-actions" style="display:none;">

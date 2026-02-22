@@ -250,10 +250,12 @@ timerSetting.oninput = () => {
 };
 
 settingsApplyBtn.onclick = () => {
-    const timeout  = timerInfinity.checked ? 0 : parseInt(timerSetting.value);
-    const diffEl   = document.querySelector('input[name="ai-diff"]:checked');
-    const diff     = diffEl ? diffEl.value : 'medium';
-    socket.emit('update_settings', { room: ROOM, move_timeout: timeout, ai_difficulty: diff });
+    const timeout   = timerInfinity.checked ? 0 : parseInt(timerSetting.value);
+    const diffEl    = document.querySelector('input[name="ai-diff"]:checked');
+    const diff      = diffEl ? diffEl.value : 'medium';
+    const orderEl   = document.querySelector('input[name="ai-order"]:checked');
+    const order     = orderEl ? orderEl.value : 'first';
+    socket.emit('update_settings', { room: ROOM, move_timeout: timeout, ai_difficulty: diff, ai_player_order: order });
     settingsModal.style.display = 'none';
 };
 
@@ -270,6 +272,8 @@ socket.on('settingsUpdated', data => {
     }
     const diffEl = document.querySelector(`input[name="ai-diff"][value="${data.ai_difficulty}"]`);
     if (diffEl) diffEl.checked = true;
+    const orderEl = document.querySelector(`input[name="ai-order"][value="${data.ai_player_order || 'first'}"]`);
+    if (orderEl) orderEl.checked = true;
 });
 
 // ── Socket Listeners ──────────────────────────────────────────────────────────

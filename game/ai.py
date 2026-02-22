@@ -1,9 +1,16 @@
-"""AI for Ultimate Tic Tac Toe — easy / medium / hard difficulties."""
+"""AI for Ultimate Tic Tac Toe — easy / medium / hard difficulties.
+
+Hard uses Monte Carlo Tree Search (MCTS) with UCB1 selection.
+A lightweight internal GameState is used for simulations so deepcopy
+of the real game object (which carries large move history snapshots) is avoided.
+"""
 import random
+import math
+import time
 from .logic import WIN_LINES
 
 
-# ── Taunts ──────────────────────────────────────────────────────────────────
+# ── Taunts ───────────────────────────────────────────────────────────────────
 AI_TAUNTS = {
     'easy': [
         "beep boop 🤖", "i think i did good?", "i'm still learning...",
@@ -28,13 +35,178 @@ TAUNT_CHANCE = {'easy': 0.5, 'medium': 0.30, 'hard': 0.35}
 
 
 def maybe_taunt(difficulty):
-    """Return a taunt string or None."""
     if random.random() < TAUNT_CHANCE.get(difficulty, 0.3):
         return random.choice(AI_TAUNTS.get(difficulty, AI_TAUNTS['medium']))
     return None
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Lightweight game state for MCTS simulations ──────────────────────────────
+# We avoid deepcopy-ing the real UltimateTicTacToe object (which stores large
+# move-history snapshots) by using this stripped-down clone instead.
+
+def _check_line_winner(board):
+    """Return winner symbol or None for a 9-cell list."""
+    for a, b, c in WIN_LINES:
+        if board[a] and board[a] == board[b] == board[c]:
+            return board[a]
+    if all(board):
+        return 'D'
+    return None
+
+
+def _check_meta_winner(board_winners):
+    """Return meta-game winner from the 9 mini-board results."""
+    for a, b, c in WIN_LINES:
+        if board_winners[a] and board_winners[a] != 'D' and board_winners[a] == board_winners[b] == board_winners[c]:
+            return board_winners[a]
+    if all(board_winners):
+        x = board_winners.count('X')
+        o = board_winners.count('O')
+        return 'X' if x > o else ('O' if o > x else 'D')
+    return None
+
+
+class _SimState:
+    """Fast-clone game state used exclusively inside MCTS rollouts."""
+    __slots__ = ('boards', 'winners', 'player', 'forced', 'winner')
+
+    def __init__(self, game):
+        self.boards  = [list(row) for row in game.boards]
+        self.winners = list(game.board_winners)
+        self.player  = game.current_player
+        self.forced  = game.forced_board
+        self.winner  = game.game_winner
+
+    def clone(self):
+        s         = _SimState.__new__(_SimState)
+        s.boards  = [list(row) for row in self.boards]
+        s.winners = list(self.winners)
+        s.player  = self.player
+        s.forced  = self.forced
+        s.winner  = self.winner
+        return s
+
+    def valid_moves(self):
+        boards = range(9) if self.forced is None else [self.forced]
+        return [(b, c) for b in boards if not self.winners[b]
+                for c in range(9) if self.boards[b][c] is None]
+
+    def push(self, b, c):
+        p              = self.player
+        self.boards[b][c] = p
+        if not self.winners[b]:
+            w = _check_line_winner(self.boards[b])
+            if w:
+                self.winners[b] = w
+        self.winner  = _check_meta_winner(self.winners)
+        self.forced  = c if not self.winners[c] else None
+        self.player  = 'O' if p == 'X' else 'X'
+
+
+# ── MCTS ──────────────────────────────────────────────────────────────────────
+class _Node:
+    __slots__ = ('move', 'parent', 'children', 'wins', 'visits', 'untried')
+
+    def __init__(self, move=None, parent=None, untried=None):
+        self.move     = move
+        self.parent   = parent
+        self.children = []
+        self.wins     = 0.0
+        self.visits   = 0
+        self.untried  = untried or []
+
+    def ucb1(self, c=1.41):
+        if self.visits == 0:
+            return float('inf')
+        return self.wins / self.visits + c * math.sqrt(math.log(self.parent.visits) / self.visits)
+
+    def best_child(self, c=1.41):
+        return max(self.children, key=lambda n: n.ucb1(c))
+
+
+def _rollout(state: _SimState) -> str:
+    """Play out randomly from state, biased toward winning/blocking moves."""
+    s = state.clone()
+    while not s.winner:
+        moves = s.valid_moves()
+        if not moves:
+            break
+        # Light heuristic bias during rollout: prefer immediate mini-wins
+        ai  = s.player
+        opp = 'O' if ai == 'X' else 'X'
+        win_moves   = [(b, c) for b, c in moves if _would_win_mini(s, b, c, ai)]
+        block_moves = [(b, c) for b, c in moves if _would_win_mini(s, b, c, opp)]
+        if win_moves:
+            b, c = random.choice(win_moves)
+        elif block_moves:
+            b, c = random.choice(block_moves)
+        else:
+            b, c = random.choice(moves)
+        s.push(b, c)
+    return s.winner or 'D'
+
+
+def _would_win_mini(s: _SimState, b: int, c: int, player: str) -> bool:
+    bd = s.boards[b]
+    for a, bb, cc in WIN_LINES:
+        line = [bd[a], bd[bb], bd[cc]]
+        if line.count(player) == 2 and line.count(None) == 1:
+            empties = [a, bb, cc]
+            if empties[[bd[x] for x in [a, bb, cc]].index(None)] == c:
+                return True
+    return False
+
+
+def _mcts(game, valid, time_limit: float = 1.5, max_sims: int = 800) -> tuple:
+    """Run MCTS and return the best (board, cell) move."""
+    ai   = game.current_player
+    root = _Node(untried=list(valid))
+    base = _SimState(game)
+    deadline = time.time() + time_limit
+
+    for _ in range(max_sims):
+        if time.time() >= deadline:
+            break
+
+        node  = root
+        state = base.clone()
+
+        # Selection — walk tree while fully expanded
+        while not node.untried and node.children:
+            node = node.best_child()
+            state.push(*node.move)
+            if state.winner:
+                break
+
+        # Expansion
+        if node.untried and not state.winner:
+            move = node.untried.pop(random.randrange(len(node.untried)))
+            state.push(*move)
+            child = _Node(move=move, parent=node,
+                          untried=state.valid_moves() if not state.winner else [])
+            node.children.append(child)
+            node = child
+
+        # Simulation
+        result = _rollout(state) if not state.winner else state.winner
+
+        # Backpropagation
+        n = node
+        while n is not None:
+            n.visits += 1
+            if result == ai:
+                n.wins += 1.0
+            elif result == 'D':
+                n.wins += 0.4   # draws are slightly bad for us — we want to win
+            n = n.parent
+
+    if not root.children:
+        return random.choice(valid)
+    best = max(root.children, key=lambda n: n.visits)
+    return best.move
+
+
+# ── Simple helpers for easy/medium ───────────────────────────────────────────
 def _find_winning_cell(board_state, player):
     for a, b, c in WIN_LINES:
         vals = [board_state[a], board_state[b], board_state[c]]
@@ -61,42 +233,6 @@ def _meta_wins_after(game, b, player):
     return False
 
 
-def _count_two_in_row(board_state, player):
-    """Count lines where player has 2 and the third is empty."""
-    count = 0
-    for a, b, c in WIN_LINES:
-        vals = [board_state[a], board_state[b], board_state[c]]
-        if vals.count(player) == 2 and vals.count(None) == 1:
-            count += 1
-    return count
-
-
-def _board_score(game, b, player):
-    """Heuristic score of mini-board b for player (for hard difficulty)."""
-    if game.board_winners[b] == player:
-        return 10
-    if game.board_winners[b] and game.board_winners[b] != player:
-        return -10
-    score = 0
-    opp = 'O' if player == 'X' else 'X'
-    score += _count_two_in_row(game.boards[b], player) * 2
-    score -= _count_two_in_row(game.boards[b], opp) * 2
-    if game.boards[b][4] == player:
-        score += 1
-    return score
-
-
-def _destination_board_score(game, dest_board, ai):
-    """How good is it for opponent to land on dest_board?  Lower = better for ai."""
-    opp = 'O' if ai == 'X' else 'X'
-    if game.board_winners[dest_board] is not None:
-        return 0          # board already won / drawn — opponent gets free choice → neutral
-    # If opponent would have a winning move from that board, bad for us
-    opp_wins = sum(1 for c in range(9)
-                   if game.boards[dest_board][c] is None and _mini_wins_after(game, dest_board, c, opp))
-    return -opp_wins
-
-
 # ── Public API ────────────────────────────────────────────────────────────────
 def get_ai_move(game, difficulty='medium'):
     valid = game.get_valid_moves()
@@ -105,21 +241,18 @@ def get_ai_move(game, difficulty='medium'):
     if difficulty == 'easy':
         return _easy(game, valid)
     if difficulty == 'hard':
-        return _hard(game, valid)
+        return _mcts(game, valid, time_limit=1.5, max_sims=800)
     return _medium(game, valid)
 
 
 def _easy(game, valid):
-    """Easy: mostly random, occasionally makes an obvious win/block."""
     ai  = game.current_player
     opp = 'O' if ai == 'X' else 'X'
     if random.random() < 0.35:
-        # Try to win meta
         for b, c in valid:
             if _mini_wins_after(game, b, c, ai) and _meta_wins_after(game, b, ai):
                 return b, c
     if random.random() < 0.25:
-        # Block obvious meta loss
         for b, c in valid:
             if _mini_wins_after(game, b, c, opp) and _meta_wins_after(game, b, opp):
                 return b, c
@@ -127,7 +260,6 @@ def _easy(game, valid):
 
 
 def _medium(game, valid):
-    """Medium: structured heuristics (original logic)."""
     ai  = game.current_player
     opp = 'O' if ai == 'X' else 'X'
     for b, c in valid:
@@ -149,54 +281,3 @@ def _medium(game, valid):
     if corners:
         return random.choice(corners)
     return random.choice(valid)
-
-
-def _hard(game, valid):
-    """Hard: enhanced heuristics with board scoring and destination awareness."""
-    ai  = game.current_player
-    opp = 'O' if ai == 'X' else 'X'
-
-    # 1. Win meta immediately
-    for b, c in valid:
-        if _mini_wins_after(game, b, c, ai) and _meta_wins_after(game, b, ai):
-            return b, c
-
-    # 2. Block human meta win
-    for b, c in valid:
-        if _mini_wins_after(game, b, c, opp) and _meta_wins_after(game, b, opp):
-            return b, c
-
-    # 3. Win a mini-board that's strategically valuable
-    winning_moves = [(b, c) for b, c in valid if _mini_wins_after(game, b, c, ai)]
-    if winning_moves:
-        # Prefer the win that sends opponent to a worse board
-        scored = []
-        for b, c in winning_moves:
-            dest_score = _destination_board_score(game, c, ai)
-            scored.append((dest_score, b, c))
-        scored.sort(reverse=True)
-        return scored[0][1], scored[0][2]
-
-    # 4. Block human mini-board win (prioritise boards that would help them win meta)
-    block_moves = [(b, c) for b, c in valid if _mini_wins_after(game, b, c, opp)]
-    if block_moves:
-        scored = []
-        for b, c in block_moves:
-            dest_score = _destination_board_score(game, c, ai)
-            scored.append((dest_score, b, c))
-        scored.sort(reverse=True)
-        return scored[0][1], scored[0][2]
-
-    # 5. Score all moves by: mini-board score + destination penalty
-    def move_score(b, c):
-        board_val = _board_score(game, b, ai)
-        dest_val  = _destination_board_score(game, c, ai)
-        center_bonus = 1 if c == 4 else 0
-        meta_center  = 2 if b == 4 else 0
-        return board_val + dest_val + center_bonus + meta_center
-
-    best = max(valid, key=lambda mv: move_score(mv[0], mv[1]))
-    # Add a tiny random tie-break so hard isn't deterministic
-    top_score = move_score(best[0], best[1])
-    top_moves = [(b, c) for b, c in valid if move_score(b, c) >= top_score - 1]
-    return random.choice(top_moves)

@@ -32,12 +32,10 @@ onClick('create-casual', () => {
     socket.emit('create', { ranked: false });
 });
 
-document.querySelectorAll('.ai-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const diff = btn.dataset.diff;
-        console.log('[socket] Emitting: create { ai: true, difficulty:', diff, '}');
-        socket.emit('create', { ai: true, difficulty: diff });
-    });
+// Single AI button — difficulty is set via ⚙️ Settings inside the game room
+onClick('create-ai', () => {
+    console.log('[socket] Emitting: create { ai: true, difficulty: medium }');
+    socket.emit('create', { ai: true, difficulty: 'medium' });
 });
 
 onClick('join', joinGame);
