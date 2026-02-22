@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ user.username }}'s Profile</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+
+<div class="profile-layout">
+    <div class="card profile-card">
+        <div class="profile-header">
+            <h1>{{ user.username }}</h1>
+            <a href="{{ url_for('home') }}" class="button secondary small">Home</a>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-item">
+                <h2>{{ wins }}</h2>
+                <p>Wins</p>
+            </div>
+            <div class="stat-item">
+                <h2>{{ losses }}</h2>
+                <p>Losses</p>
+            </div>
+            <div class="stat-item">
+                <h2>{{ draws }}</h2>
+                <p>Draws</p>
+            </div>
+            <div class="stat-item elo">
+                <h2>{{ user.elo }}</h2>
+                <p>ELO Rating</p>
+            </div>
+            <div class="stat-item streak">
+                <h2>{{ user.win_streak }}</h2>
+                <p>🔥 Streak</p>
+            </div>
+            <div class="stat-item streak">
+                <h2>{{ user.best_streak }}</h2>
+                <p>Best Streak</p>
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <h2 style="margin-bottom:10px;">Match History</h2>
+        <ul class="match-history">
+            {% for match in matches %}
+                {% set result = 'draw' if match.is_draw else ('win' if match.winner_id == user.id else 'loss') %}
+                <li class="match-item {{ result }}">
+                    <div class="match-result {{ result }}">
+                        {% if match.is_draw %}Draw
+                        {% elif match.winner_id == user.id %}Win
+                        {% else %}Loss{% endif %}
+                    </div>
+                    <div class="match-opponent">
+                        vs.
+                        {% if match.player1_id == user.id %}{{ match.player2.username }}
+                        {% else %}{{ match.player1.username }}{% endif %}
+                    </div>
+                    <div class="match-timestamp">{{ match.timestamp.strftime('%b %d, %Y') }}</div>
+                </li>
+            {% else %}
+                <li>No matches played yet.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</div>
+
+</body>
+</html>

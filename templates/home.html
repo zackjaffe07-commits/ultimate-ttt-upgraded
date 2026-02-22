@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate Tic Tac Toe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+
+<div class="user-bar">
+    <span>Welcome, {{ current_user.username }}!</span>
+    {% if not is_guest %}
+        <a href="{{ url_for('profile') }}">Profile</a>
+    {% endif %}
+    <a href="{{ url_for('logout') }}">Logout</a>
+</div>
+
+<div class="center">
+    <div class="card home-card">
+        <h1>Ultimate Tic Tac Toe</h1>
+        <p class="subtitle">A strategy game of games</p>
+
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+
+        <div class="home-actions">
+            <button class="primary" id="create">⚔️ vs Human</button>
+            <button class="secondary" id="create-ai">🤖 vs AI</button>
+        </div>
+        <div class="home-actions" style="margin-top:0;">
+            <a href="{{ url_for('rules') }}" class="button secondary">📖 Rules</a>
+        </div>
+
+        <div class="divider">or join a game</div>
+
+        <input id="room" placeholder="Enter room code">
+        <button class="secondary" id="join">Join Game</button>
+    </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script src="{{ url_for('static', filename='js/home.js') }}"></script>
+</body>
+</html>

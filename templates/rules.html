@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>How to Play - Ultimate Tic Tac Toe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .rules-layout { max-width: 800px; margin: 0 auto; }
+        .rules-card { max-width: 100%; text-align: left; }
+        .rule-section { margin-bottom: 24px; }
+        .rule-section h3 { margin-bottom: 8px; color: #1d2671; }
+        .rule-graphic { margin-top: 12px; }
+        .mini-board-demo { display: inline-grid; grid-template-columns: repeat(3, 30px); gap: 2px; background: #ccc; border-radius: 6px; padding: 2px; }
+        .cell-demo { width: 30px; height: 30px; background: #fff; border-radius: 4px; display: flex; justify-content: center; align-items: center; font-weight: bold; }
+        .forced-demo { box-shadow: 0 0 0 3px #ffd700; }
+    </style>
+</head>
+<body class="bg">
+
+<div class="rules-layout">
+    <div class="card rules-card">
+        <div class="profile-header">
+            <h1>How to Play</h1>
+            <a href="{{ url_for('home') }}" class="button secondary small">Back to Home</a>
+        </div>
+
+        <div class="rule-section">
+            <h3>The Basics</h3>
+            <p>Ultimate Tic-Tac-Toe is played on a large 3x3 grid, where each cell contains a smaller 3x3 Tic-Tac-Toe board.</p>
+        </div>
+
+        <div class="rule-section">
+            <h3>The Golden Rule</h3>
+            <p><strong>The cell you pick in a small board determines which small board the next player must play in.</strong></p>
+            <p>For example, if you place an X in the <strong>top-right</strong> cell of a small board, your opponent MUST play their O in the <strong>top-right</strong> small board.</p>
+            <div class="rule-graphic">
+                <div class="mini-board-demo">
+                    <div class="cell-demo"></div><div class="cell-demo"></div><div class="cell-demo" style="color: #e74c3c;">X</div>
+                    <div class="cell-demo"></div><div class="cell-demo"></div><div class="cell-demo"></div>
+                    <div class="cell-demo"></div><div class="cell-demo"></div><div class="cell-demo"></div>
+                </div>
+                <span>&rarr; Next player must play in the top-right board.</span>
+            </div>
+        </div>
+
+        <div class="rule-section">
+            <h3>Winning a Small Board</h3>
+            <p>To win a small board, you need to get three of your marks in a row (horizontally, vertically, or diagonally) on that board. The small board is then marked as yours and can no longer be played in.</p>
+        </div>
+
+        <div class="rule-section">
+            <h3>Winning the Game</h3>
+            <p>To win the entire game, you need to win three small boards in a row on the large grid.</p>
+        </div>
+
+        <div class="rule-section">
+            <h3>Tiebreaker Rule</h3>
+            <p>If the main 3x3 grid becomes full and no player has won three small boards in a row, the game enters a tiebreaker. The player who has won the most individual small boards is declared the winner. If the number of won boards is equal, the game is a draw.</p>
+        </div>
+
+        <div class="rule-section">
+            <h3>What if a board is already won or full?</h3>
+            <p>If you are sent to a small board that has already been won or is full, you may play your mark on <strong>any other open cell</strong> in any other small board.</p>
+        </div>
+
+    </div>
+</div>
+
+</body>
+</html>

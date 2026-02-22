@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Ultimate Tic Tac Toe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+
+<div class="center">
+    <div class="card auth-card">
+        <h1>Welcome Back</h1>
+        <p class="subtitle">Login to access your account</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="error">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('login') }}" class="auth-form">
+            <input type="text" name="username" placeholder="Username" required>
+            <input type="password" name="password" placeholder="Password" required>
+            <button type="submit" class="primary">Login</button>
+        </form>
+
+        <div class="divider"></div>
+
+        <p>Don't have an account? <a href="{{ url_for('register') }}">Register here</a></p>
+        <p class="subtle-link"><a href="{{ url_for('landing') }}">Back to main page</a></p>
+    </div>
+</div>
+
+</body>
+</html>

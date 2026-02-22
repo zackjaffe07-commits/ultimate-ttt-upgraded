@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome - Ultimate Tic Tac Toe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg">
+<div class="center">
+    <div class="card home-card">
+        <h1>Ultimate Tic Tac Toe</h1>
+        <p class="subtitle">A strategy game of games</p>
+        <a href="{{ url_for('login') }}" class="button primary">Login &amp; Play</a>
+        <div class="divider">or</div>
+        <a href="{{ url_for('guest_login') }}" class="button secondary">Play as Guest</a>
+    </div>
+</div>
+</body>
+</html>
