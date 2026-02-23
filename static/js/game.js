@@ -800,8 +800,7 @@ function drawBoardGrid(state, justMoved, isHistoryView) {
             }
             if (state.lastMove && state.lastMove[0] === b && state.lastMove[1] === c)
                 cell.classList.add('last-move');
-            if (boardWon && boardWon !== "D" && state.boardWinLines && state.boardWinLines[b])
-                if (state.boardWinLines[b].includes(c)) cell.classList.add('win-cell');
+            // win-cell highlight removed — won boards show overlay symbol instead
 
             // No grey-out: just block pointer on invalid boards
             if (isMyTurn && (!validBoards.has(b) || boardWon || symbol))
@@ -884,22 +883,36 @@ if (takebackDeclineBtn) {
     };
 }
 
+
+socket.on('takeback_result', data => {
+    takebackPending = false;
+    const accepted = data.accepted;
+    const auto     = data.auto; // true = cancelled because opponent moved
+    const msgDiv   = document.createElement("div");
+    msgDiv.classList.add("chat-message");
+    if (accepted) {
+        msgDiv.style.cssText = 'color:#2ecc71; font-style:italic; font-weight:600;';
+        msgDiv.textContent   = '↩ Takeback approved!';
+    } else if (auto) {
+        msgDiv.style.cssText = 'color:#e67e22; font-style:italic;';
+        msgDiv.textContent   = '↩ Takeback cancelled — opponent played a move.';
+    } else {
+        msgDiv.style.cssText = 'color:#e74c3c; font-style:italic;';
+        msgDiv.textContent   = '↩ Takeback declined by opponent.';
+    }
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    // Button will reappear naturally on the next updateTakebackBtn() call
+    // (triggered by state update). For accept, state arrives momentarily.
+    // For decline/auto, re-evaluate now.
+    if (!accepted) updateTakebackBtn();
+});
+
 socket.on('takeback_requested', data => {
     if (!takebackRequestCard) return;
     takebackRequestText.textContent = `${data.requester} requests a takeback`;
     takebackRequestCard.style.display = 'block';
 });
 
-socket.on('takeback_declined', () => {
-    takebackPending = false;
-    // Show the takeback button again if conditions still met
-    updateTakebackBtn();
-    // Notify via chat
-    const msgDiv = document.createElement("div");
-    msgDiv.classList.add("chat-message");
-    msgDiv.style.cssText = 'color:#e74c3c; font-style:italic;';
-    msgDiv.textContent = '↩ Takeback request declined by opponent.';
-    chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-});
+// takeback_declined removed — replaced by unified takeback_result below
 

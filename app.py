@@ -9,7 +9,7 @@ from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import or_
 from game.logic import UltimateTicTacToe
-from game.ai import get_ai_move, maybe_taunt
+from game.ai import get_ai_move, maybe_taunt, calc_ai_time_budget
 import random, string, os, time, math, json
 from functools import wraps
 
@@ -601,6 +601,10 @@ def move(data):
         return
     g = game_data["game"]
     prev_player = g.current_player
+    # Auto-decline any pending takeback when a move is played
+    pending_tb = game_data.pop("pending_takeback", None)
+    if pending_tb:
+        emit("takeback_result", {"accepted": False, "auto": True}, to=pending_tb)
     if g.make_move(data["board"], data["cell"]):
         # Deduct elapsed time for game timer
         _deduct_game_time(game_data, prev_player)
@@ -621,9 +625,32 @@ def move(data):
             socketio.sleep(0)  # yield to event loop so the emit above is flushed
             ai_prev = g.current_player
             diff    = game_data.get("ai_difficulty", "medium")
-            ai_b, ai_c = get_ai_move(g, diff)
+            # Check if AI is already out of time (game timer) before it even moves
+            if game_data.get("timer_type") == "game":
+                ai_rem = game_data.get(f"game_time_{ai_prev.lower()}", 1)
+                if ai_rem <= 0:
+                    g.resign(ai_prev)
+                    game_data["move_deadline"] = None
+                    record_match(game_data, g.game_winner)
+                    emit("state", full_state(game_data), room=data["room"])
+                    emit_game_status(data["room"])
+                    return
+            # Calculate adaptive time budget for hard AI
+            tl = calc_ai_time_budget(game_data)
+            ai_b, ai_c = get_ai_move(g, diff, time_limit=tl)
             g.make_move(ai_b, ai_c)
             _deduct_game_time(game_data, ai_prev)
+            # Check if AI ran out of game time AFTER its move
+            if game_data.get("timer_type") == "game" and not g.game_winner:
+                ai_rem_after = game_data.get(f"game_time_{ai_prev.lower()}", 1)
+                if ai_rem_after <= 0:
+                    winner_sym = "X" if ai_prev == "O" else "O"
+                    g.resign(ai_prev)
+                    game_data["move_deadline"] = None
+                    record_match(game_data, g.game_winner)
+                    emit("state", full_state(game_data), room=data["room"])
+                    emit_game_status(data["room"])
+                    return
             # AI taunt
             taunt = maybe_taunt(diff)
             if taunt:
@@ -684,7 +711,8 @@ def timeout(data):
                     if game_data.get("is_ai") and not g.game_winner:
                         ai_prev = g.current_player
                         diff = game_data.get("ai_difficulty", "medium")
-                        ai_b, ai_c = get_ai_move(g, diff)
+                        tl = calc_ai_time_budget(game_data)
+                        ai_b, ai_c = get_ai_move(g, diff, time_limit=tl)
                         g.make_move(ai_b, ai_c)
                         _deduct_game_time(game_data, ai_prev)
                         if g.game_winner:
@@ -747,16 +775,25 @@ def rematch(data):
     # Human vs human rematch
     game_data["rematchReady"].add(sid)
     if len(game_data["rematchReady"]) >= 2:
-        old_pa = game_data["player_accounts"]
-        new_pa = {}
-        if "X" in old_pa and "O" in old_pa:
-            new_pa["X"] = old_pa["O"]
-            new_pa["O"] = old_pa["X"]
+        old_pa   = game_data["player_accounts"]
+        host_uid = game_data.get("creator_uid")  # host always keeps X
+
+        # Determine which uid gets X (host) and which gets O
+        all_uids = {uid: sym for sym, uid in old_pa.items() if uid and uid != "AI"}
+        if host_uid and host_uid in all_uids:
+            host_sym = all_uids[host_uid]
+            guest_uid = next((uid for uid in all_uids if uid != host_uid), None)
+            new_pa = {"X": host_uid}
+            if guest_uid: new_pa["O"] = guest_uid
         else:
-            new_pa = old_pa
+            # Fallback: just swap
+            new_pa = {"X": old_pa.get("O", old_pa.get("X")),
+                      "O": old_pa.get("X", old_pa.get("O"))}
+
         new_players = {}
         for s, p in game_data["players"].items():
-            new_sym = "O" if p["symbol"] == "X" else "X"
+            uid    = p.get("user_id")
+            new_sym = "X" if uid == host_uid else "O"
             new_players[s] = {**p, "symbol": new_sym}
             emit("assign", new_sym, to=s)
         new_gd = make_game_data(
@@ -1021,11 +1058,11 @@ def takeback_response(data):
         g = game_data["game"]
         g.undo_move()
         reset_timer(game_data)
+        emit("takeback_result", {"accepted": True}, to=pending_sid)
         emit("state", full_state(game_data), room=room)
         emit_game_status(room)
     else:
-        # Notify requester that takeback was declined
-        emit("takeback_declined", {}, to=pending_sid)
+        emit("takeback_result", {"accepted": False, "auto": False}, to=pending_sid)
 
 
 @app.route("/account-settings")

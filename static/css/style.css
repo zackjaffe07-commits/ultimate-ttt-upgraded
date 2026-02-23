@@ -257,7 +257,7 @@ input {
 .cell.O { color: #3498db; }
 .cell.invalid { opacity: 0.35; cursor: default; pointer-events: none; }
 .cell.last-move { box-shadow: inset 0 0 0 2px #ffd700; background: rgba(255,215,0,0.15); }
-.cell.win-cell  { background: rgba(255,215,0,0.25) !important; box-shadow: inset 0 0 0 2px #ffd700; }
+/* win-cell yellow highlight removed */
 .cell.placed { animation: cellPop 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
 
 @keyframes cellPop {

@@ -2,21 +2,17 @@
 
 Difficulty summary
 ──────────────────
-Easy   : 100% random. No strategy whatsoever.
-Medium : 50% chance to play randomly, 50% chance to play the best
-         greedy move (win/block, prefer center/corners). Mistakes happen often.
-Hard   : Iterative-deepening Minimax + Alpha-Beta pruning with a hand-tuned
-         heuristic encoding UTTT-specific strategy (see below).
+Easy   : 100% random.
+Medium : 50% random, 50% greedy (win/block, prefer center/corners).
+Hard   : Hybrid — iterative-deepening Alpha-Beta (primary) + MCTS overlay
+         with adaptive time budgets based on timer mode.
 
-Hard strategic principles encoded in the heuristic
-──────────────────────────────────────────────────
-• Sending the opponent to a WON/FULL board (free choice) is the worst move.
-• Sending the opponent to the CENTER board (4) is very bad.
-• Sending the opponent to a CORNER board (0,2,6,8) is mildly bad.
-• Sending the opponent to an EDGE board (1,3,5,7 = the "diamond") is fine.
-• Priority: win CENTER mini-board first, then CORNERS, then build 3-in-a-row.
-• A meta 2-in-a-row threat outweighs having lots of individual grid wins.
-• Within each mini-board: centre cell (4) > corners > edges.
+Time budget policy (Hard)
+─────────────────────────
+• Move timer  → 40% of move timeout, capped at 12s, floor 0.5s
+• Game timer  → scales with remaining time: generous early, tiny when low
+                Falls back to pure heuristic under 3s remaining
+• No timer    → 3.0s flat
 """
 import random
 import math
@@ -56,43 +52,27 @@ def maybe_taunt(difficulty):
 # ── Board geometry constants ──────────────────────────────────────────────────
 _CENTER_BOARD  = 4
 _CORNER_BOARDS = frozenset({0, 2, 6, 8})
-_EDGE_BOARDS   = frozenset({1, 3, 5, 7})   # the "diamond" boards
+_EDGE_BOARDS   = frozenset({1, 3, 5, 7})
 
-# How STRATEGICALLY VALUABLE each meta-board is for the AI to control.
-# Center >> corners >> edges.
 _META_VALUE = [6, 3, 6, 3, 10, 3, 6, 3, 6]
-
-# Cell weight within a mini-board: centre > corners > edges.
 _CELL_VALUE = [3, 2, 3, 2, 4, 2, 3, 2, 3]
-
-# PENALTY applied to AI score for sending the opponent to board index i.
-# Large positive = bad for AI (opponent gets good position).
-# Negative = actually good for AI (forces opponent somewhere weak).
-#   Free choice (won board)  → -300 in score  ← worst case
-#   Center board (4)         → -200
-#   Corner boards (0,2,6,8)  → -60
-#   Edge boards (1,3,5,7)    → +20  ← forcing diamond = fine
-_SEND_PENALTY = [60, -20, 60, -20, 200, -20, 60, -20, 60]
-_FREE_MOVE_PENALTY = 300   # sending to a won/full board (free choice) is worst
+_SEND_PENALTY    = [60, -20, 60, -20, 200, -20, 60, -20, 60]
+_FREE_MOVE_PENALTY = 300
 
 
-# ── Lightweight game state ────────────────────────────────────────────────────
+# ── Lightweight sim state ─────────────────────────────────────────────────────
 def _check_line_winner(board):
     for a, b, c in WIN_LINES:
         if board[a] and board[a] == board[b] == board[c]:
             return board[a]
-    if all(board):
-        return 'D'
-    return None
+    return 'D' if all(board) else None
 
-def _check_meta_winner(board_winners):
+def _check_meta_winner(winners):
     for a, b, c in WIN_LINES:
-        if board_winners[a] and board_winners[a] != 'D' \
-                and board_winners[a] == board_winners[b] == board_winners[c]:
-            return board_winners[a]
-    if all(board_winners):
-        x = board_winners.count('X')
-        o = board_winners.count('O')
+        if winners[a] and winners[a] != 'D' and winners[a] == winners[b] == winners[c]:
+            return winners[a]
+    if all(winners):
+        x = winners.count('X'); o = winners.count('O')
         return 'X' if x > o else ('O' if o > x else 'D')
     return None
 
@@ -100,15 +80,15 @@ class _SimState:
     __slots__ = ('boards', 'winners', 'player', 'forced', 'winner')
 
     def __init__(self, game):
-        self.boards  = [list(row) for row in game.boards]
+        self.boards  = [list(r) for r in game.boards]
         self.winners = list(game.board_winners)
         self.player  = game.current_player
         self.forced  = game.forced_board
         self.winner  = game.game_winner
 
     def clone(self):
-        s         = _SimState.__new__(_SimState)
-        s.boards  = [list(row) for row in self.boards]
+        s = _SimState.__new__(_SimState)
+        s.boards  = [list(r) for r in self.boards]
         s.winners = list(self.winners)
         s.player  = self.player
         s.forced  = self.forced
@@ -125,281 +105,281 @@ class _SimState:
         self.boards[b][c] = p
         if not self.winners[b]:
             w = _check_line_winner(self.boards[b])
-            if w:
-                self.winners[b] = w
-        self.winner  = _check_meta_winner(self.winners)
-        self.forced  = c if not self.winners[c] else None
-        self.player  = 'O' if p == 'X' else 'X'
+            if w: self.winners[b] = w
+        self.winner = _check_meta_winner(self.winners)
+        self.forced = c if not self.winners[c] else None
+        self.player = 'O' if p == 'X' else 'X'
 
 
 # ── Heuristic evaluation ──────────────────────────────────────────────────────
 def _mini_score(board, ai, opp):
-    """Score one mini-board: 2-in-a-row threats + positional cells."""
     score = 0
     for a, b, c in WIN_LINES:
         line = [board[a], board[b], board[c]]
-        ai_n  = line.count(ai)
-        op_n  = line.count(opp)
-        if ai_n > 0 and op_n == 0:
-            score += 10 * (10 ** (ai_n - 1))    # 10, 100
-        elif op_n > 0 and ai_n == 0:
-            score -= 12 * (10 ** (op_n - 1))    # -12, -120  (defend slightly more)
+        an, op = line.count(ai), line.count(opp)
+        if an > 0 and op == 0: score += 10 * (10 ** (an - 1))
+        elif op > 0 and an == 0: score -= 12 * (10 ** (op - 1))
     for i in range(9):
-        if board[i] == ai:
-            score += _CELL_VALUE[i]
-        elif board[i] == opp:
-            score -= _CELL_VALUE[i]
+        if board[i] == ai: score += _CELL_VALUE[i]
+        elif board[i] == opp: score -= _CELL_VALUE[i]
     return score
 
 def _evaluate(state, ai):
-    """Full strategic heuristic. Positive = good for AI."""
     opp = 'O' if ai == 'X' else 'X'
-
-    # Terminal states
     if state.winner == ai:  return  200000
     if state.winner == opp: return -200000
     if state.winner == 'D': return 0
-
     score = 0
-
-    # ── Meta-board 3-in-a-row threats ─────────────────────────────────────────
-    # This is the top priority: 2-in-a-row on the meta board beats everything.
     for a, b, c in WIN_LINES:
         wl = [state.winners[a], state.winners[b], state.winners[c]]
-        ai_n  = wl.count(ai)
-        op_n  = wl.count(opp)
-        # Value lines through center higher (center appears in 4 lines)
-        line_importance = 1 + (1 if _CENTER_BOARD in (a, b, c) else 0)
-        if ai_n > 0 and op_n == 0:
-            score += line_importance * (500 if ai_n == 1 else 4000)
-        elif op_n > 0 and ai_n == 0:
-            score -= line_importance * (600 if op_n == 1 else 5000)  # block more urgently
-
-    # ── Mini-board control (weighted by meta-board importance) ────────────────
+        an, op = wl.count(ai), wl.count(opp)
+        lim = 1 + (1 if _CENTER_BOARD in (a, b, c) else 0)
+        if an > 0 and op == 0: score += lim * (500 if an == 1 else 4000)
+        elif op > 0 and an == 0: score -= lim * (600 if op == 1 else 5000)
     for i in range(9):
         mv = _META_VALUE[i]
-        if state.winners[i] == ai:
-            score += mv * 80         # won board, weight by position
-        elif state.winners[i] == opp:
-            score -= mv * 95         # opponent's won board hurts more
+        if state.winners[i] == ai: score += mv * 80
+        elif state.winners[i] == opp: score -= mv * 95
         elif not state.winners[i]:
-            # Unresolved board: score internal position, scaled by meta importance
             score += _mini_score(state.boards[i], ai, opp) * (mv / 6.0)
-
-    # ── Destination penalty: where does THIS move send the opponent? ──────────
-    # (Evaluated from the perspective of the LAST move made, i.e. current forced board)
     if state.forced is None:
-        # Opponent gets free choice — big penalty
         score -= _FREE_MOVE_PENALTY
     else:
         dest = state.forced
-        if state.winners[dest]:
-            # Sent to a won board → free choice anyway → worst
-            score -= _FREE_MOVE_PENALTY
-        else:
-            # _SEND_PENALTY[dest]: positive = bad for AI (opponent gets good spot)
-            score -= _SEND_PENALTY[dest]
-
+        score -= _FREE_MOVE_PENALTY if state.winners[dest] else _SEND_PENALTY[dest]
     return score
 
 
-# ── Alpha-Beta Minimax ────────────────────────────────────────────────────────
+# ── Alpha-Beta ────────────────────────────────────────────────────────────────
 _KILLER_MOVES = {}
 
 def _move_score_for_ordering(state, b, c, ai):
-    """Quick priority score for move ordering (higher = try first)."""
-    opp     = 'O' if ai == 'X' else 'X'
-    current = state.player
-    score   = 0
-
-    # 1. Immediate meta win — try first, skip rest
+    opp = 'O' if ai == 'X' else 'X'
+    cur = state.player
+    score = 0
     s2 = state.clone(); s2.push(b, c)
-    if s2.winner == current:
-        return 1_000_000
-
-    # 2. Block immediate opponent meta win
+    if s2.winner == cur: return 1_000_000
     s3 = state.clone(); s3.player = opp; s3.push(b, c)
-    if s3.winner == opp:
-        score += 80_000
-
-    # 3. Mini-board win in a high-value board
-    bc = state.boards[b][:]
-    bc[c] = current
-    if _check_line_winner(bc) not in (None, 'D'):
-        score += 3000 * _META_VALUE[b]    # winning center board >> corner >> edge
-
-    # 4. Block opponent mini-board win in a high-value board
-    bc2 = state.boards[b][:]
-    bc2[c] = opp
-    if _check_line_winner(bc2) not in (None, 'D'):
-        score += 2000 * _META_VALUE[b]
-
-    # 5. Destination quality: sending opponent to edge (diamond) = good
-    if s2.winner is None:   # game not over
-        dest = c  # where opponent will be sent
-        if state.winners[dest]:
-            score -= 5000   # free move for opponent = terrible
-        else:
-            score -= _SEND_PENALTY[dest] * 20  # positive penalty = subtract = bad
-
-    # 6. Playing in the center mini-board or corner mini-board
-    score += _META_VALUE[b] * 30
-
-    # 7. Cell position within mini-board (centre > corners > edges)
-    score += _CELL_VALUE[c] * 10
-
-    # 8. Killer move bonus
-    if (b, c) in _KILLER_MOVES.get(0, set()):
-        score += 500
-
+    if s3.winner == opp: score += 80_000
+    bc = state.boards[b][:]; bc[c] = cur
+    if _check_line_winner(bc) not in (None, 'D'): score += 3000 * _META_VALUE[b]
+    bc2 = state.boards[b][:]; bc2[c] = opp
+    if _check_line_winner(bc2) not in (None, 'D'): score += 2000 * _META_VALUE[b]
+    if s2.winner is None:
+        dest = c
+        score -= 5000 if state.winners[dest] else _SEND_PENALTY[dest] * 20
+    score += _META_VALUE[b] * 30 + _CELL_VALUE[c] * 10
+    if (b, c) in _KILLER_MOVES.get(0, set()): score += 500
     return score
-
-def _order_moves(state, moves, ai, depth):
-    return sorted(moves,
-                  key=lambda m: _move_score_for_ordering(state, m[0], m[1], ai),
-                  reverse=True)
 
 def _alphabeta(state, depth, alpha, beta, ai, deadline):
     if state.winner or depth == 0 or time.time() >= deadline:
         return _evaluate(state, ai), None
-
     moves = state.valid_moves()
-    if not moves:
-        return _evaluate(state, ai), None
-
-    ordered   = _order_moves(state, moves, ai, depth)
+    if not moves: return _evaluate(state, ai), None
+    ordered   = sorted(moves, key=lambda m: _move_score_for_ordering(state, m[0], m[1], ai), reverse=True)
     best_move = ordered[0]
     maximizing = (state.player == ai)
-
     if maximizing:
         best_val = -math.inf
         for b, c in ordered:
-            child = state.clone()
-            child.push(b, c)
+            child = state.clone(); child.push(b, c)
             val, _ = _alphabeta(child, depth - 1, alpha, beta, ai, deadline)
-            if val > best_val:
-                best_val, best_move = val, (b, c)
+            if val > best_val: best_val, best_move = val, (b, c)
             alpha = max(alpha, best_val)
             if beta <= alpha:
-                _KILLER_MOVES.setdefault(depth, set()).add((b, c))
-                break
+                _KILLER_MOVES.setdefault(depth, set()).add((b, c)); break
         return best_val, best_move
     else:
         best_val = math.inf
         for b, c in ordered:
-            child = state.clone()
-            child.push(b, c)
+            child = state.clone(); child.push(b, c)
             val, _ = _alphabeta(child, depth - 1, alpha, beta, ai, deadline)
-            if val < best_val:
-                best_val, best_move = val, (b, c)
+            if val < best_val: best_val, best_move = val, (b, c)
             beta = min(beta, best_val)
             if beta <= alpha:
-                _KILLER_MOVES.setdefault(depth, set()).add((b, c))
-                break
+                _KILLER_MOVES.setdefault(depth, set()).add((b, c)); break
         return best_val, best_move
 
 
-def _hard_ai(game, valid, time_limit=2.5):
-    """Iterative-deepening alpha-beta. Returns (board, cell)."""
-    ai       = game.current_player
-    state    = _SimState(game)
+# ── MCTS ─────────────────────────────────────────────────────────────────────
+class _MCTSNode:
+    __slots__ = ('state', 'move', 'parent', 'children', 'wins', 'visits', 'untried')
+    def __init__(self, state, move=None, parent=None):
+        self.state   = state
+        self.move    = move
+        self.parent  = parent
+        self.children = []
+        self.wins    = 0.0
+        self.visits  = 0
+        self.untried = state.valid_moves()
+
+    def ucb1(self, c=1.41):
+        if self.visits == 0: return math.inf
+        return self.wins / self.visits + c * math.sqrt(math.log(self.parent.visits) / self.visits)
+
+    def expand(self):
+        move  = self.untried.pop(random.randrange(len(self.untried)))
+        child = _MCTSNode(self.state.clone(), move, self)
+        child.state.push(*move)
+        self.children.append(child)
+        return child
+
+    def rollout(self, ai):
+        s = self.state.clone()
+        opp = 'O' if ai == 'X' else 'X'
+        for _ in range(60):
+            if s.winner: break
+            moves = s.valid_moves()
+            if not moves: break
+            picked = None
+            sample = random.sample(moves, min(8, len(moves)))
+            for b, c in sample:
+                tmp = s.clone(); tmp.push(b, c)
+                if tmp.winner == s.player: picked = (b, c); break
+            if not picked:
+                for b, c in sample:
+                    tmp = s.clone(); tmp.player = opp; tmp.push(b, c)
+                    if tmp.winner == opp: picked = (b, c); break
+            if not picked: picked = random.choice(moves)
+            s.push(*picked)
+        w = s.winner
+        if w == ai:   return 1.0
+        if w == 'D':  return 0.4
+        if w is None: return 0.3 + 0.1 * ((_evaluate(s, ai) + 200000) / 400000)
+        return 0.0
+
+    def backprop(self, result):
+        self.visits += 1; self.wins += result
+        if self.parent: self.parent.backprop(1.0 - result)
+
+
+def _mcts(state, ai, time_limit):
+    if time_limit < 0.15: return None
+    root     = _MCTSNode(state)
     deadline = time.time() + time_limit
-    best_move = valid[0]
+    while time.time() < deadline:
+        node = root
+        while not node.untried and node.children:
+            node = max(node.children, key=lambda n: n.ucb1())
+        if node.untried and not node.state.winner:
+            node = node.expand()
+        node.backprop(node.rollout(ai))
+    if not root.children: return None
+    return max(root.children, key=lambda n: n.visits).move
+
+
+# ── Hard AI — hybrid Alpha-Beta + MCTS ───────────────────────────────────────
+def _hard_ai(game, valid, time_limit=2.5):
+    ai    = game.current_player
+    state = _SimState(game)
+    t0    = time.time()
+    deadline = t0 + time_limit
 
     # Instant win
     for b, c in valid:
         s2 = state.clone(); s2.push(b, c)
-        if s2.winner == ai:
-            return b, c
+        if s2.winner == ai: return b, c
 
-    # Instant block (opponent would win next move)
-    opp = 'O' if ai == 'X' else 'X'
+    # Forced block
+    opp   = 'O' if ai == 'X' else 'X'
+    block = None
     for b, c in valid:
         s2 = state.clone(); s2.player = opp; s2.push(b, c)
-        if s2.winner == opp:
-            best_move = (b, c)   # we must block this
-            break
+        if s2.winner == opp: block = (b, c); break
+    best_move = block if block else valid[0]
 
-    # Iterative deepening
-    for depth in range(1, 15):
-        if time.time() >= deadline:
-            break
+    # Phase 1: Alpha-Beta — 70% of budget
+    ab_deadline = t0 + time_limit * 0.70
+    for depth in range(1, 16):
+        if time.time() >= ab_deadline: break
         try:
-            val, move = _alphabeta(state, depth, -math.inf, math.inf, ai, deadline)
-            if move:
-                best_move = move
-            if val >= 200000:
-                break   # forced win found
+            val, move = _alphabeta(state, depth, -math.inf, math.inf, ai, ab_deadline)
+            if move: best_move = move
+            if val >= 200000: return best_move
         except Exception:
             break
+
+    # Phase 2: MCTS — remaining budget
+    mcts_budget = deadline - time.time()
+    if mcts_budget >= 0.15:
+        mcts_move = _mcts(state, ai, mcts_budget)
+        if mcts_move:
+            ab_score   = _move_score_for_ordering(state, *best_move,  ai)
+            mcts_score = _move_score_for_ordering(state, *mcts_move, ai)
+            if mcts_score > ab_score * 1.05:
+                best_move = mcts_move
 
     return best_move
 
 
-# ── Greedy helper (used by medium) ───────────────────────────────────────────
+# ── Greedy helper (medium) ────────────────────────────────────────────────────
 def _greedy_move(game, valid):
-    """Best single-ply greedy move: win > block > centre > corner > edge."""
     ai  = game.current_player
     opp = 'O' if ai == 'X' else 'X'
-
-    def mini_wins(b, c, player):
-        bc = game.boards[b][:]
-        bc[c] = player
-        return any(bc[a] == bc[bb] == bc[cc] == player for a, bb, cc in WIN_LINES)
-
-    def meta_wins(b, player):
-        bw = game.board_winners[:]
-        bw[b] = player
-        return any(bw[a] == bw[bb] == bw[cc] == player for a, bb, cc in WIN_LINES)
-
-    # Win the game
+    def mini_wins(b, c, p):
+        bc = game.boards[b][:]; bc[c] = p
+        return any(bc[a] == bc[bb] == bc[cc] == p for a, bb, cc in WIN_LINES)
+    def meta_wins(b, p):
+        bw = game.board_winners[:]; bw[b] = p
+        return any(bw[a] == bw[bb] == bw[cc] == p for a, bb, cc in WIN_LINES)
     for b, c in valid:
-        if mini_wins(b, c, ai) and meta_wins(b, ai):
-            return b, c
-    # Block opponent game win
+        if mini_wins(b, c, ai) and meta_wins(b, ai): return b, c
     for b, c in valid:
-        if mini_wins(b, c, opp) and meta_wins(b, opp):
-            return b, c
-    # Win a mini-board (prefer centre > corners > edges)
+        if mini_wins(b, c, opp) and meta_wins(b, opp): return b, c
     for brd in [_CENTER_BOARD] + list(_CORNER_BOARDS) + list(_EDGE_BOARDS):
         for b, c in valid:
-            if b == brd and mini_wins(b, c, ai):
-                return b, c
-    # Block opponent mini-board win (prefer high-value boards)
+            if b == brd and mini_wins(b, c, ai): return b, c
     for brd in [_CENTER_BOARD] + list(_CORNER_BOARDS) + list(_EDGE_BOARDS):
         for b, c in valid:
-            if b == brd and mini_wins(b, c, opp):
-                return b, c
-    # Positional: prefer centre cell in high-value boards
+            if b == brd and mini_wins(b, c, opp): return b, c
     for brd in [_CENTER_BOARD] + list(_CORNER_BOARDS):
         centre = [(b, c) for b, c in valid if b == brd and c == 4]
-        if centre:
-            return random.choice(centre)
+        if centre: return random.choice(centre)
     corners = [(b, c) for b, c in valid if c in _CORNER_BOARDS]
-    if corners:
-        return random.choice(corners)
-    return random.choice(valid)
+    return random.choice(corners) if corners else random.choice(valid)
+
+
+# ── Time budget calculator ────────────────────────────────────────────────────
+def calc_ai_time_budget(game_data):
+    """Return seconds the Hard AI should think. None for easy/medium."""
+    diff = game_data.get('ai_difficulty', 'medium')
+    if diff != 'hard':
+        return None
+
+    timer_type = game_data.get('timer_type', 'move')
+
+    if timer_type == 'none':
+        return 3.0
+
+    if timer_type == 'move':
+        mt = game_data.get('move_timeout', 30) or 0
+        if mt <= 0: return 3.0
+        # 40% of move time — strong but won't frustrate the human player
+        return max(0.5, min(mt * 0.40, 12.0))
+
+    if timer_type == 'game':
+        ai_sym    = game_data['game'].current_player
+        remaining = game_data.get(f'game_time_{ai_sym.lower()}',
+                                  game_data.get('game_time_each', 300))
+        if remaining <= 0:   return 0.0
+        if remaining <= 3:   return 0.05   # heuristic only, basically instant
+        if remaining <= 10:  return 0.15
+        if remaining <= 20:  return 0.4
+        if remaining <= 60:  return min(remaining * 0.06, 3.0)
+        if remaining <= 300: return min(remaining * 0.04, 8.0)
+        return min(remaining * 0.025, 12.0)
+
+    return 3.0
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
-def get_ai_move(game, difficulty='medium'):
+def get_ai_move(game, difficulty='medium', time_limit=None):
     valid = game.get_valid_moves()
-    if not valid:
-        return None
-    if difficulty == 'easy':
-        return _easy(valid)
-    if difficulty == 'hard':
-        return _hard_ai(game, valid, time_limit=2.5)
-    return _medium(game, valid)
-
-
-def _easy(valid):
-    """100% random — no strategy at all."""
-    return random.choice(valid)
-
-
-def _medium(game, valid):
-    """50% random, 50% greedy best move."""
-    if random.random() < 0.5:
-        return random.choice(valid)
-    return _greedy_move(game, valid)
+    if not valid: return None
+    if difficulty == 'easy':  return random.choice(valid)
+    if difficulty == 'medium':
+        return random.choice(valid) if random.random() < 0.5 else _greedy_move(game, valid)
+    # Hard
+    tl = time_limit if time_limit is not None else 2.5
+    return _hard_ai(game, valid, time_limit=max(0.05, tl))
