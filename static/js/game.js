@@ -850,7 +850,7 @@ let takebackPending = false; // we sent a request, waiting for response
 
 function updateTakebackBtn() {
     if (!takebackBtn) return;
-    const isInGame = gameState.started && !gameState.gameWinner && !isSpectator && !gameState.isRanked && !gameState.isAI;
+    const isInGame = gameState.started && !gameState.gameWinner && !isSpectator && !gameState.isRanked;
     const hasMoves = gameState.moveHistory && gameState.moveHistory.length > 0;
     const lastMover = hasMoves ? gameState.moveHistory[gameState.moveHistory.length - 1].player : null;
     // Show only if I made the last move (it's opponent's turn) and no pending request

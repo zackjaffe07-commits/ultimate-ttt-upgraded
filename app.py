@@ -1016,8 +1016,8 @@ def takeback_request(data):
     game_data = get_active_games().get(room)
     if not game_data: return
     g = game_data["game"]
-    # Only allow in casual (non-ranked), non-AI, in-progress games
-    if game_data.get("is_ranked") or game_data.get("is_ai"): return
+    # Only allow in casual (non-ranked) in-progress games
+    if game_data.get("is_ranked"): return
     if not g.started or g.game_winner: return
     if len(g.move_history) == 0: return
 
@@ -1031,6 +1031,18 @@ def takeback_request(data):
 
     # Don't allow stacking takeback requests
     if game_data.get("pending_takeback"): return
+
+    # AI games: auto-accept immediately (undo both AI move and player move)
+    if game_data.get("is_ai"):
+        # Undo 2 moves: player's move + the AI response that followed
+        moves_to_undo = min(2, len(g.move_history))
+        for _ in range(moves_to_undo):
+            g.undo_move()
+        reset_timer(game_data)
+        emit("takeback_result", {"accepted": True}, to=sid)
+        emit("state", full_state(game_data), room=data.get("room"))
+        emit_game_status(data.get("room"))
+        return
 
     game_data["pending_takeback"] = sid
 
@@ -1159,6 +1171,48 @@ def admin_reset_db():
     admin_user.best_streak = 0
     db.session.commit()
     flash('Database reset. All accounts and match data cleared.', 'success')
+    return redirect(url_for('admin_panel'))
+
+
+@app.route("/admin/delete-user", methods=["POST"])
+@login_required
+def admin_delete_user():
+    if current_user.username != 'admin':
+        return redirect(url_for('home'))
+    user_id = request.form.get('user_id')
+    u = User.query.get(int(user_id))
+    if not u or u.username == 'admin':
+        flash('Cannot delete that account.', 'error')
+        return redirect(url_for('admin_panel'))
+    Match.query.filter(
+        or_(Match.player1_id == u.id, Match.player2_id == u.id, Match.winner_id == u.id)
+    ).delete(synchronize_session=False)
+    db.session.delete(u)
+    db.session.commit()
+    flash(f'Account "{u.username}" deleted.', 'success')
+    return redirect(url_for('admin_panel'))
+
+@app.route("/admin/adjust-elo", methods=["POST"])
+@login_required
+def admin_adjust_elo():
+    if current_user.username != 'admin':
+        return redirect(url_for('home'))
+    user_id = request.form.get('user_id')
+    amount  = request.form.get('amount', '0')
+    try:
+        amount = int(amount)
+    except ValueError:
+        flash('Invalid ELO amount.', 'error')
+        return redirect(url_for('admin_panel'))
+    u = User.query.get(int(user_id))
+    if not u:
+        flash('User not found.', 'error')
+        return redirect(url_for('admin_panel'))
+    old_elo = u.elo
+    u.elo = max(0, u.elo + amount)
+    db.session.commit()
+    direction = f"+{amount}" if amount >= 0 else str(amount)
+    flash(f'ELO adjusted for "{u.username}": {old_elo} → {u.elo} ({direction}).', 'success')
     return redirect(url_for('admin_panel'))
 
 def _ensure_db_columns():
